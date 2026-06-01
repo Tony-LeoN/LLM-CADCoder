@@ -1,0 +1,24 @@
+# IDE - PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+.ipr
+out/
+
+# Python 常见忽略项（可选）
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+*.egg-info/
+dist/
+build/
+
+# 其他
+.DS_Store
+.vscode/
+*.log
