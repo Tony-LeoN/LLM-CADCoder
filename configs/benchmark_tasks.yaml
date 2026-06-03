@@ -1,0 +1,35 @@
+benchmark_small:
+  description: First-pass model-screening tasks for engineering drawing understanding.
+  tasks:
+    - view_count
+    - view_classification
+    - dimension_ocr
+    - feature_count
+    - json_stability
+
+tasks:
+  view_count:
+    input_level: page_png
+    expected_output: integer
+    metric: exact_match
+
+  view_classification:
+    input_level: page_or_view_png
+    expected_output: view labels for each detected view
+    metric: accuracy
+
+  dimension_ocr:
+    input_level: annotated_view_png
+    expected_output: dimension text list
+    metric: normalized_text_f1
+
+  feature_count:
+    input_level: clean_view_png
+    expected_output: counts of holes, slots, chamfers, fillets, counterbores
+    metric: count_accuracy
+
+  json_stability:
+    input_level: model_output
+    expected_output: parseable json
+    metric: parse_rate
+

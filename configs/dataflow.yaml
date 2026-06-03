@@ -1,0 +1,22 @@
+project_root: .
+dataflow_root: DataFlow
+
+stages:
+  raw_pdf_with_step: 01.RawPDFWithSTEP
+  raw_png: 02.RawPNG
+  layout_analysis: 03.LayoutAnalysis
+  clean_png: 04.CleanPNG
+  view_detection: 05.ViewDetection
+  single_views: 06.SingleViews
+  view_classification: 07.ViewClassification
+  multi_view_feature_extraction: 08.Multi-viewFeatureExtraction
+  cross_view_geometric_reasoning: 09.Cross-viewGeometricReasoning
+  structured_cad_representation: 10.StructuredCADRepresentation
+  cad_program: 11.CADProgram
+
+pdf_render:
+  dpi: 600
+  output_format: png
+  skip_multipage: true
+  coordinate_system: image_xy_top_left
+

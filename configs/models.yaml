@@ -1,0 +1,62 @@
+default_model: mock
+
+models:
+  mock:
+    adapter: mock
+    model_path: null
+    device: cpu
+    dtype: null
+    max_new_tokens: 512
+
+  internvl_2b:
+    adapter: internvl
+    model_path: /models/Mini-InternVL-2B
+    device: cuda
+    device_map: auto
+    dtype: bfloat16
+    max_new_tokens: 1024
+    image_size: 448
+    max_num_tiles: 12
+
+  internvl3_5_2b:
+    adapter: internvl
+    model_path: /models/InternVL3_5-2B
+    device: cuda
+    device_map: auto
+    dtype: bfloat16
+    max_new_tokens: 1024
+    image_size: 448
+    max_num_tiles: 12
+
+  qwen3_vl_2b_instruct:
+    adapter: qwen_vl
+    model_path: /models/Qwen3-VL-2B-Instruct
+    device: cuda
+    device_map: auto
+    dtype: bfloat16
+    max_new_tokens: 1024
+
+  qwen3_vl_2b_thinking:
+    adapter: qwen_vl
+    model_path: /models/Qwen3-VL-2B-Thinking
+    device: cuda
+    device_map: auto
+    dtype: bfloat16
+    max_new_tokens: 2048
+
+  qwen2_5_vl_3b:
+    adapter: qwen_vl
+    model_path: /models/Qwen2.5-VL-3B-Instruct
+    device: cuda
+    device_map: auto
+    dtype: bfloat16
+    max_new_tokens: 1024
+
+  paddleocr_vl:
+    adapter: paddleocr_vl
+    model_path: /models/PaddleOCR-VL
+    device: cuda
+    dtype: bfloat16
+    max_new_tokens: 1024
+    server_url: http://127.0.0.1:8010/predict
+    timeout: 120

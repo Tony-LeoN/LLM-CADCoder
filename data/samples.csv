@@ -1,0 +1,3 @@
+sample_id,pdf_path,step_path,level,part_family,notes
+X350-05-070-A,DataFlow/01.RawPDFWithSTEP/X350-05-070-A.pdf,DataFlow/01.RawPDFWithSTEP/X350-05-070-A.STEP,L2,plate,counterbore hole sample with existing CadQuery and FreeCAD prototypes
+

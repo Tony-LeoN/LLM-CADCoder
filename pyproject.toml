@@ -1,0 +1,15 @@
+[project]
+name = "vlm-cadcoder"
+version = "0.1.0"
+description = "Drawing understanding and model-screening benchmark for constraint-aware CAD code generation."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+pdf = ["PyMuPDF"]
+vision = ["Pillow", "torch", "torchvision", "transformers>=4.57.0", "accelerate"]
+qwen = ["qwen-vl-utils[decord]"]
+yaml = ["PyYAML"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
