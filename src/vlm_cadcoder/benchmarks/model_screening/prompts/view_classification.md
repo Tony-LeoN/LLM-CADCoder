@@ -16,3 +16,8 @@ Return JSON only:
 
 Use engineering drawing projection relationships. If uncertain, use "unknown" and explain briefly in evidence.
 
+Rules:
+
+- Do not use markdown code fences.
+- Do not output URLs, file names, or external references.
+- Evidence must describe visible geometry or projection layout in the provided drawing image.
