@@ -1,2 +1,1 @@
-{"sample_id":"X350-05-070-A","tasks":["view_count","view_classification","dimension_ocr","feature_count","json_stability"]}
-
+{"sample_id":"X350-05-070-A","input_images":["DataFlow/02.RawPNG/X350-05-070-A/page_001_600dpi.png"],"tasks":["view_count","view_classification","dimension_ocr","feature_count","json_stability"],"ground_truth":{"view_count":{"view_count":2}}}
