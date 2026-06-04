@@ -17,6 +17,8 @@ class QwenVLAdapter(VisionModel):
         self.dtype_name = kwargs.get("dtype", "bfloat16")
         self.max_new_tokens = int(kwargs.get("max_new_tokens", 1024))
         self.device_map = kwargs.get("device_map", "auto")
+        self.min_pixels = kwargs.get("min_pixels")
+        self.max_pixels = kwargs.get("max_pixels")
         self.model: Any | None = None
         self.processor: Any | None = None
 
@@ -96,7 +98,12 @@ class QwenVLAdapter(VisionModel):
                 load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
             self.model = model_cls.from_pretrained(self.model_path, **load_kwargs).eval()
 
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        processor_kwargs: dict[str, Any] = {"trust_remote_code": True}
+        if self.min_pixels is not None:
+            processor_kwargs["min_pixels"] = int(self.min_pixels)
+        if self.max_pixels is not None:
+            processor_kwargs["max_pixels"] = int(self.max_pixels)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, **processor_kwargs)
 
     def _process_vision_info(self, messages: list[dict[str, Any]]) -> tuple[Any, Any, dict[str, Any]]:
         from qwen_vl_utils import process_vision_info

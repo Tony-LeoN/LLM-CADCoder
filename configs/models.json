@@ -34,7 +34,9 @@
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",
-      "max_new_tokens": 1024
+      "max_new_tokens": 512,
+      "min_pixels": 200704,
+      "max_pixels": 1003520
     },
     "qwen3_vl_2b_thinking": {
       "adapter": "qwen_vl",
@@ -42,7 +44,9 @@
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",
-      "max_new_tokens": 2048
+      "max_new_tokens": 1024,
+      "min_pixels": 200704,
+      "max_pixels": 1003520
     },
     "qwen2_5_vl_3b": {
       "adapter": "qwen_vl",
@@ -50,7 +54,9 @@
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",
-      "max_new_tokens": 1024
+      "max_new_tokens": 512,
+      "min_pixels": 200704,
+      "max_pixels": 1003520
     },
     "paddleocr_vl": {
       "adapter": "paddleocr_vl",
