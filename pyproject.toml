@@ -7,8 +7,10 @@ dependencies = []
 
 [project.optional-dependencies]
 pdf = ["PyMuPDF"]
+layout = ["Pillow", "numpy"]
 vision = [
     "Pillow",
+    "numpy",
     "torch==2.1.0",
     "torchvision==0.16.0",
     "transformers>=4.57.0",

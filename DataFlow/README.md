@@ -17,6 +17,8 @@
 
 4. `04.CleanPNG`
    - Cleaned page or view images after denoising, binarization, or annotation removal.
+   - The first implementation keeps the original page size and whites out removable layout regions.
+   - Removed regions should still be preserved as crops when they contain useful manufacturing knowledge, such as hole tables or title blocks.
 
 5. `05.ViewDetection`
    - Detected view bounding boxes and view-region metadata.
@@ -53,3 +55,42 @@ bbox = [x1, y1, x2, y2]
 
 Keep the render metadata for coordinate transforms between PDF points and image pixels.
 
+## Layout Cleaning MVP
+
+The first layout module is rule based and targets page-level cleanup before view detection:
+
+```text
+RawPNG full page
+-> black long-line extraction
+-> page-frame and table-region rules
+-> layout JSON + removed-region crops
+-> full-size clean PNG
+```
+
+Current removable region types:
+
+- `page_border`: outer frame, coordinate-grid strips, and page-edge lines
+- `hole_table`: left-side hole/coordinate table
+- `title_or_tolerance_table`: bottom title block and general tolerance tables
+- `revision_table`: top-right revision table
+
+The clean image must preserve dimensions, drawing views, leader callouts, surface roughness callouts, geometric tolerances, and technical notes unless a later stage explicitly extracts them first.
+
+Example command:
+
+```bash
+python -m vlm_cadcoder.cli clean-layout \
+  --image DataFlow/LayoutSamples/raw_img/2023-2024-1-335.png \
+  --sample-id 2023-2024-1-335 \
+  --dataflow-root DataFlow
+```
+
+Expected outputs:
+
+```text
+DataFlow/03.LayoutAnalysis/<sample_id>/page_001_layout.json
+DataFlow/03.LayoutAnalysis/<sample_id>/page_001_overlay.png
+DataFlow/03.LayoutAnalysis/<sample_id>/regions/*.png
+DataFlow/04.CleanPNG/<sample_id>/page_001_clean.png
+DataFlow/04.CleanPNG/<sample_id>/page_001_remove_mask.png
+```
