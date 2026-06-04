@@ -10,14 +10,14 @@
     },
     "internvl_2b": {
       "adapter": "internvl",
-      "model_path": "/models/Mini-InternVL-2B",
+      "model_path": "/home/zxwcax/models/Mini-InternVL-2B",
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",
       "max_new_tokens": 1024,
       "image_size": 448,
       "max_num_tiles": 12
-    },
+  },
     "internvl3_5_2b": {
       "adapter": "internvl",
       "model_path": "/models/InternVL3_5-2B",
@@ -46,7 +46,7 @@
     },
     "qwen2_5_vl_3b": {
       "adapter": "qwen_vl",
-      "model_path": "/models/Qwen2.5-VL-3B-Instruct",
+      "model_path": "/home/zxwcax/models/Qwen2.5-VL-3B-Instruct",
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",

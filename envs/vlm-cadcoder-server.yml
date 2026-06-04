@@ -1,20 +1,15 @@
 name: vlm-cadcoder
-channels:
-  - conda-forge
-  - pytorch
-  - nvidia
 dependencies:
-  - python=3.11
+  - python=3.10
   - pip
   - pillow
   - pyyaml
   - tqdm
   - numpy
+  - pytorch=2.1.0               # 指定版本
+  - torchvision=0.16.0          # 与 torch 版本对应
   - pip:
       - pymupdf
       - accelerate
       - transformers>=4.57.0
       - qwen-vl-utils[decord]
-      - torch
-      - torchvision
-
