@@ -22,7 +22,9 @@ class LayoutCleanConfig:
     border_padding_px: int = 12
     left_table_max_x_ratio: float = 0.48
     bottom_table_min_y_ratio: float = 0.78
-    bottom_table_min_x_ratio: float = 0.28
+    bottom_table_min_y2_ratio: float = 0.92
+    bottom_table_min_width_ratio: float = 0.25
+    bottom_table_min_area_ratio: float = 0.01
     revision_min_x_ratio: float = 0.62
     revision_max_y_ratio: float = 0.16
     min_grid_segments: int = 8
@@ -31,7 +33,6 @@ class LayoutCleanConfig:
     max_revision_height_ratio: float = 0.085
     max_revision_area_ratio: float = 0.025
     max_hole_table_width_ratio: float = 0.56
-    max_colored_foreground_ratio: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ def clean_layout_page(
             "coordinate_system": "image_xy_top_left",
             "method": {
                 "name": "rule_based_line_component_layout_cleaner",
-                "version": "0.2.0",
+                "version": "0.2.1",
                 "config": cfg.__dict__,
             },
             "regions": region_dicts,
@@ -409,10 +410,6 @@ def _classify_table_component(
         return None
 
     area_ratio = bbox.area / (width * height)
-    color_ratio = _colored_foreground_ratio(rgb, bbox, cfg.dark_threshold, cfg.neutral_delta)
-    if color_ratio > cfg.max_colored_foreground_ratio and area_ratio > 0.035:
-        return None
-
     x1_ratio = bbox.x1 / width
     x2_ratio = bbox.x2 / width
     y1_ratio = bbox.y1 / height
@@ -430,7 +427,13 @@ def _classify_table_component(
     ):
         return "revision_table"
 
-    if y1_ratio >= cfg.bottom_table_min_y_ratio and x1_ratio >= cfg.bottom_table_min_x_ratio and h_count >= 6 and v_count >= 6:
+    if (
+        (y1_ratio >= cfg.bottom_table_min_y_ratio or y2_ratio >= cfg.bottom_table_min_y2_ratio)
+        and width_ratio >= cfg.bottom_table_min_width_ratio
+        and area_ratio >= cfg.bottom_table_min_area_ratio
+        and h_count >= 6
+        and v_count >= 6
+    ):
         return "title_or_tolerance_table"
 
     if (

@@ -31,6 +31,30 @@ def test_central_view_is_not_classified_as_left_hole_table() -> None:
     assert [region for region in regions if region.region_type == "hole_table"] == []
 
 
+def test_bottom_table_is_detected_without_fixed_x_start() -> None:
+    image = Image.new("RGB", (1000, 700), "white")
+    draw = ImageDraw.Draw(image)
+    _draw_table(draw, (30, 560, 960, 680), rows=5, cols=10)
+
+    regions = detect_layout_regions(image)
+    title_regions = [region for region in regions if region.region_type == "title_or_tolerance_table"]
+
+    assert len(title_regions) == 1
+    assert title_regions[0].bbox.x1 <= 30
+
+
+def test_bottom_table_with_colored_stamp_is_still_detected() -> None:
+    image = Image.new("RGB", (1000, 700), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((360, 585, 850, 660), fill=(120, 0, 0))
+    _draw_table(draw, (300, 560, 960, 680), rows=5, cols=8)
+
+    regions = detect_layout_regions(image)
+    title_regions = [region for region in regions if region.region_type == "title_or_tolerance_table"]
+
+    assert len(title_regions) == 1
+
+
 def _draw_table(
     draw: ImageDraw.ImageDraw,
     box: tuple[int, int, int, int],
