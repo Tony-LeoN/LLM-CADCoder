@@ -44,6 +44,24 @@ def clean_layout(args: argparse.Namespace) -> None:
     print(f"Detected {len(result.regions)} removable layout regions")
 
 
+def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
+
+    result = build_view2cad_prototype(
+        sample_id=args.sample_id,
+        config=View2CADPrototypeConfig(
+            dataflow_root=Path(args.dataflow_root),
+            external_crop_set=args.external_crop_set,
+            experiments_root=Path(args.experiments_root),
+            output_set=args.output_set,
+        ),
+    )
+    print(f"Wrote external crop manifest to {result.manifest_path}")
+    print(f"Wrote minimal DrawingIR to {result.drawing_ir_path}")
+    print(f"Wrote modeling plan to {result.modeling_plan_path}")
+    print(f"Wrote CadQuery prompt to {result.cadquery_prompt_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="vlm-cadcoder")
     subparsers = parser.add_subparsers(required=True)
@@ -70,6 +88,14 @@ def main() -> None:
     clean_parser.add_argument("--save-crops", action=argparse.BooleanOptionalAction, default=True)
     clean_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
     clean_parser.set_defaults(func=clean_layout)
+
+    view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
+    view2cad_parser.add_argument("--sample-id", required=True)
+    view2cad_parser.add_argument("--dataflow-root", default="DataFlow")
+    view2cad_parser.add_argument("--external-crop-set", default="testView2CAD")
+    view2cad_parser.add_argument("--experiments-root", default="experiments/external_crops")
+    view2cad_parser.add_argument("--output-set", default="testView2CAD")
+    view2cad_parser.set_defaults(func=build_view2cad_prototype_cli)
 
     args = parser.parse_args()
     args.func(args)

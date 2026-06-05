@@ -26,6 +26,7 @@
 6. `06.SingleViews`
    - Cropped views.
    - Prefer three layers per view: raw view with annotations, clean geometry view, annotation layer.
+   - `testView2CAD/` may store externally cropped view samples for downstream prototype tests. These samples can be used to bypass `05.ViewDetection` temporarily and test DrawingIR/CadQuery generation, but they must be marked as external crops and should not be used as evidence for automatic view detection performance.
 
 7. `07.ViewClassification`
    - View labels: front, top, left, section, detail, unknown.
@@ -38,9 +39,11 @@
 
 10. `10.StructuredCADRepresentation`
    - DrawingIR, ConstraintGraph, and ModelingIR JSON artifacts.
+   - For the external-crop prototype, `testView2CAD/<sample>/external_crop_manifest.json`, `minimal_drawing_ir.json`, and `modeling_plan.json` are generated from external crops, clean images, VLM benchmark outputs, and paired STEP files.
 
 11. `11.CADProgram`
    - Generated CadQuery/FreeCAD scripts, execution logs, and exported STEP/BREP models.
+   - For the external-crop prototype, `testView2CAD/<sample>/cadquery_generation_prompt.md` is generated before executable CadQuery code. This prompt is a controlled bridge from minimal DrawingIR to a reviewed CadQuery script.
 
 ## Coordinate Convention
 
