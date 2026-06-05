@@ -62,6 +62,22 @@ def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     print(f"Wrote CadQuery prompt to {result.cadquery_prompt_path}")
 
 
+def build_cadquery_draft_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.cad.cadquery_draft import CadQueryDraftConfig, build_cadquery_draft
+
+    result = build_cadquery_draft(
+        sample_id=args.sample_id,
+        config=CadQueryDraftConfig(
+            dataflow_root=Path(args.dataflow_root),
+            input_set=args.input_set,
+            output_set=args.output_set,
+            part_family=args.part_family,
+        ),
+    )
+    print(f"Wrote CadQuery parameter review to {result.parameter_path}")
+    print(f"Wrote CadQuery draft script to {result.script_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="vlm-cadcoder")
     subparsers = parser.add_subparsers(required=True)
@@ -96,6 +112,14 @@ def main() -> None:
     view2cad_parser.add_argument("--experiments-root", default="experiments/external_crops")
     view2cad_parser.add_argument("--output-set", default="testView2CAD")
     view2cad_parser.set_defaults(func=build_view2cad_prototype_cli)
+
+    cadquery_parser = subparsers.add_parser("build-cadquery-draft")
+    cadquery_parser.add_argument("--sample-id", required=True)
+    cadquery_parser.add_argument("--dataflow-root", default="DataFlow")
+    cadquery_parser.add_argument("--input-set", default="testView2CAD")
+    cadquery_parser.add_argument("--output-set", default="testView2CAD")
+    cadquery_parser.add_argument("--part-family", default="rectangular_plate")
+    cadquery_parser.set_defaults(func=build_cadquery_draft_cli)
 
     args = parser.parse_args()
     args.func(args)

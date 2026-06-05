@@ -400,6 +400,21 @@ DataFlow/10.StructuredCADRepresentation/testView2CAD/<sample_id>/modeling_plan.j
 DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_generation_prompt.md
 ```
 
+在人工复核前，可继续生成 CadQuery 参数表和草稿脚本：
+
+```bash
+python -m vlm_cadcoder.cli build-cadquery-draft \
+  --sample-id 2023-2024-1-923 \
+  --dataflow-root DataFlow
+```
+
+输出产物：
+
+```text
+DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_parameters.json
+DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_draft.py
+```
+
 该流程属于原型闭环：可以验证单视图/多视图 crops 是否足以支撑 CadQuery 代码生成，但不能替代正式的自动视图检测、尺寸-几何绑定和约束图评测。
 
 ## 12 软硬件环境

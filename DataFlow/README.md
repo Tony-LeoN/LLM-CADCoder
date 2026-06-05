@@ -44,6 +44,7 @@
 11. `11.CADProgram`
    - Generated CadQuery/FreeCAD scripts, execution logs, and exported STEP/BREP models.
    - For the external-crop prototype, `testView2CAD/<sample>/cadquery_generation_prompt.md` is generated before executable CadQuery code. This prompt is a controlled bridge from minimal DrawingIR to a reviewed CadQuery script.
+   - `cadquery_parameters.json` and `cadquery_draft.py` are prototype artifacts. They may be executable, but parameters marked as `needs_review` must not be treated as final drawing-derived constraints.
 
 ## Coordinate Convention
 
