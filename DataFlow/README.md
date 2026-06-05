@@ -62,7 +62,8 @@ The first layout module is rule based and targets page-level cleanup before view
 ```text
 RawPNG full page
 -> black long-line extraction
--> page-frame and table-region rules
+-> connected line-component grouping
+-> page-frame and table-component classification
 -> layout JSON + removed-region crops
 -> full-size clean PNG
 ```
@@ -75,6 +76,8 @@ Current removable region types:
 - `revision_table`: top-right revision table
 
 The clean image must preserve dimensions, drawing views, leader callouts, surface roughness callouts, geometric tolerances, and technical notes unless a later stage explicitly extracts them first.
+
+The detector classifies each connected long-line component independently. It should not merge every line inside a fixed left, bottom, or top-right window, because nearby dimensions and view outlines can otherwise be swallowed by an oversized removable region.
 
 Example command:
 

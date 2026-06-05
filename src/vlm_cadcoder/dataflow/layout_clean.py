@@ -26,6 +26,12 @@ class LayoutCleanConfig:
     revision_min_x_ratio: float = 0.62
     revision_max_y_ratio: float = 0.16
     min_grid_segments: int = 8
+    min_grid_intersections: int = 4
+    component_gap_px: int = 14
+    max_revision_height_ratio: float = 0.085
+    max_revision_area_ratio: float = 0.025
+    max_hole_table_width_ratio: float = 0.56
+    max_colored_foreground_ratio: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,23 @@ class LineSegment:
     @property
     def cy(self) -> float:
         return (self.y1 + self.y2) / 2
+
+
+@dataclass(frozen=True)
+class LineComponent:
+    segments: list[LineSegment]
+
+    @property
+    def horizontal_segments(self) -> list[LineSegment]:
+        return [segment for segment in self.segments if segment.axis == "h"]
+
+    @property
+    def vertical_segments(self) -> list[LineSegment]:
+        return [segment for segment in self.segments if segment.axis == "v"]
+
+    @property
+    def bbox(self) -> BBox:
+        return _segments_bbox(self.segments)
 
 
 def clean_layout_page(
@@ -107,8 +130,8 @@ def clean_layout_page(
             "image_size": [width, height],
             "coordinate_system": "image_xy_top_left",
             "method": {
-                "name": "rule_based_line_layout_cleaner",
-                "version": "0.1.0",
+                "name": "rule_based_line_component_layout_cleaner",
+                "version": "0.2.0",
                 "config": cfg.__dict__,
             },
             "regions": region_dicts,
@@ -148,7 +171,8 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
     regions: list[LayoutRegion] = []
     next_id = _region_id_factory()
     regions.extend(_detect_border_strips(h_segments, v_segments, width, height, cfg, next_id))
-    for region_type, bbox, confidence, meta in _detect_table_regions(h_segments, v_segments, width, height, cfg):
+    components = _build_line_components(h_segments + v_segments, width, height, cfg)
+    for region_type, bbox, confidence, meta in _detect_table_regions(components, rgb, width, height, cfg):
         regions.append(
             LayoutRegion(
                 region_id=next_id(),
@@ -279,56 +303,28 @@ def _border_region(region_id: str, bbox: BBox, metadata: dict[str, str]) -> Layo
 
 
 def _detect_table_regions(
-    h_segments: list[LineSegment],
-    v_segments: list[LineSegment],
+    components: list[LineComponent],
+    rgb,
     width: int,
     height: int,
     cfg: LayoutCleanConfig,
 ) -> list[tuple[str, BBox, float, dict[str, int | float]]]:
-    all_segments = h_segments + v_segments
-    proposals = [
-        (
-            "hole_table",
-            [
-                s
-                for s in all_segments
-                if s.cx <= width * cfg.left_table_max_x_ratio
-                and s.cy <= height * 0.88
-                and not _is_page_frame_segment(s, width, height, cfg)
-            ],
-        ),
-        (
-            "title_or_tolerance_table",
-            [
-                s
-                for s in all_segments
-                if s.cy >= height * cfg.bottom_table_min_y_ratio
-                and s.cx >= width * cfg.bottom_table_min_x_ratio
-                and not _is_page_frame_segment(s, width, height, cfg)
-            ],
-        ),
-        (
-            "revision_table",
-            [
-                s
-                for s in all_segments
-                if s.cx >= width * cfg.revision_min_x_ratio
-                and s.cy <= height * cfg.revision_max_y_ratio
-                and not _is_page_frame_segment(s, width, height, cfg)
-            ],
-        ),
-    ]
-
     regions: list[tuple[str, BBox, float, dict[str, int | float]]] = []
-    for region_type, segments in proposals:
-        h_count = sum(1 for s in segments if s.axis == "h")
-        v_count = sum(1 for s in segments if s.axis == "v")
+    for component in components:
+        h_segments = component.horizontal_segments
+        v_segments = component.vertical_segments
+        h_count = len(h_segments)
+        v_count = len(v_segments)
         if h_count + v_count < cfg.min_grid_segments or h_count < 2 or v_count < 2:
             continue
-        bbox = _segments_bbox(segments).clamp(width, height)
-        if not _looks_like_table_bbox(region_type, bbox, width, height):
+        bbox = component.bbox.clamp(width, height)
+        intersections = _count_intersections(h_segments, v_segments, cfg.component_gap_px)
+        if intersections < cfg.min_grid_intersections:
             continue
-        confidence = min(0.98, 0.58 + 0.012 * min(h_count + v_count, 35))
+        region_type = _classify_table_component(component, bbox, rgb, width, height, cfg)
+        if region_type is None:
+            continue
+        confidence = min(0.98, 0.56 + 0.008 * min(h_count + v_count, 40) + 0.01 * min(intersections, 10))
         regions.append(
             (
                 region_type,
@@ -337,11 +333,118 @@ def _detect_table_regions(
                 {
                     "horizontal_segments": h_count,
                     "vertical_segments": v_count,
+                    "intersections": intersections,
                     "bbox_area_ratio": round(bbox.area / (width * height), 6),
+                    "colored_foreground_ratio": round(
+                        _colored_foreground_ratio(rgb, bbox, cfg.dark_threshold, cfg.neutral_delta), 6
+                    ),
                 },
             )
         )
     return regions
+
+
+def _build_line_components(
+    segments: list[LineSegment],
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+) -> list[LineComponent]:
+    candidates = [segment for segment in segments if not _is_page_frame_segment(segment, width, height, cfg)]
+    if not candidates:
+        return []
+
+    groups = _DisjointSet(len(candidates))
+    for left_index, left in enumerate(candidates):
+        for right_index in range(left_index + 1, len(candidates)):
+            right = candidates[right_index]
+            if _segments_touch(left, right, cfg.component_gap_px):
+                groups.union(left_index, right_index)
+
+    by_root: dict[int, list[LineSegment]] = {}
+    for index, segment in enumerate(candidates):
+        by_root.setdefault(groups.find(index), []).append(segment)
+    return [LineComponent(component_segments) for component_segments in by_root.values()]
+
+
+def _segments_touch(left: LineSegment, right: LineSegment, gap: int) -> bool:
+    if left.axis == "h" and right.axis == "v":
+        return _horizontal_vertical_touch(left, right, gap)
+    if left.axis == "v" and right.axis == "h":
+        return _horizontal_vertical_touch(right, left, gap)
+    if left.axis == "h":
+        return abs(left.y1 - right.y1) <= gap and _ranges_overlap(left.x1, left.x2, right.x1, right.x2, gap)
+    return abs(left.x1 - right.x1) <= gap and _ranges_overlap(left.y1, left.y2, right.y1, right.y2, gap)
+
+
+def _horizontal_vertical_touch(horizontal: LineSegment, vertical: LineSegment, gap: int) -> bool:
+    return (
+        horizontal.x1 - gap <= vertical.x1 <= horizontal.x2 + gap
+        and vertical.y1 - gap <= horizontal.y1 <= vertical.y2 + gap
+    )
+
+
+def _ranges_overlap(a1: int, a2: int, b1: int, b2: int, gap: int = 0) -> bool:
+    return max(a1, b1) <= min(a2, b2) + gap
+
+
+def _count_intersections(h_segments: list[LineSegment], v_segments: list[LineSegment], gap: int) -> int:
+    count = 0
+    for h_segment in h_segments:
+        for v_segment in v_segments:
+            if _horizontal_vertical_touch(h_segment, v_segment, gap):
+                count += 1
+    return count
+
+
+def _classify_table_component(
+    component: LineComponent,
+    bbox: BBox,
+    rgb,
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+) -> str | None:
+    if not _looks_like_table_bbox(bbox, width, height):
+        return None
+
+    area_ratio = bbox.area / (width * height)
+    color_ratio = _colored_foreground_ratio(rgb, bbox, cfg.dark_threshold, cfg.neutral_delta)
+    if color_ratio > cfg.max_colored_foreground_ratio and area_ratio > 0.035:
+        return None
+
+    x1_ratio = bbox.x1 / width
+    x2_ratio = bbox.x2 / width
+    y1_ratio = bbox.y1 / height
+    y2_ratio = bbox.y2 / height
+    width_ratio = bbox.width / width
+    height_ratio = bbox.height / height
+    h_count = len(component.horizontal_segments)
+    v_count = len(component.vertical_segments)
+
+    if (
+        x1_ratio >= cfg.revision_min_x_ratio
+        and y2_ratio <= cfg.revision_max_y_ratio
+        and height_ratio <= cfg.max_revision_height_ratio
+        and area_ratio <= cfg.max_revision_area_ratio
+    ):
+        return "revision_table"
+
+    if y1_ratio >= cfg.bottom_table_min_y_ratio and x1_ratio >= cfg.bottom_table_min_x_ratio and h_count >= 6 and v_count >= 6:
+        return "title_or_tolerance_table"
+
+    if (
+        x1_ratio <= 0.08
+        and x2_ratio <= cfg.max_hole_table_width_ratio
+        and y1_ratio <= 0.22
+        and height_ratio >= 0.18
+        and width_ratio >= 0.08
+        and h_count >= 10
+        and v_count >= 6
+    ):
+        return "hole_table"
+
+    return None
 
 
 def _is_page_frame_segment(segment: LineSegment, width: int, height: int, cfg: LayoutCleanConfig) -> bool:
@@ -361,15 +464,22 @@ def _segments_bbox(segments: list[LineSegment]) -> BBox:
     )
 
 
-def _looks_like_table_bbox(region_type: str, bbox: BBox, width: int, height: int) -> bool:
+def _looks_like_table_bbox(bbox: BBox, width: int, height: int) -> bool:
     area_ratio = bbox.area / (width * height)
-    if region_type == "hole_table":
-        return bbox.width >= width * 0.08 and bbox.height >= height * 0.18 and area_ratio >= 0.015
-    if region_type == "title_or_tolerance_table":
-        return bbox.width >= width * 0.25 and bbox.height >= height * 0.05 and area_ratio >= 0.01
-    if region_type == "revision_table":
-        return bbox.width >= width * 0.08 and bbox.height >= height * 0.015
-    return False
+    return bbox.width >= width * 0.08 and bbox.height >= height * 0.015 and area_ratio >= 0.002
+
+
+def _colored_foreground_ratio(rgb, bbox: BBox, dark_threshold: int, neutral_delta: int) -> float:
+    crop = rgb[bbox.y1 : bbox.y2, bbox.x1 : bbox.x2]
+    if crop.size == 0:
+        return 0.0
+    max_channel = crop.max(axis=2)
+    min_channel = crop.min(axis=2)
+    dark = max_channel < dark_threshold
+    if int(dark.sum()) == 0:
+        return 0.0
+    colored = dark & ((max_channel - min_channel) > neutral_delta)
+    return float(colored.sum() / dark.sum())
 
 
 def _deduplicate_regions(regions: list[LayoutRegion]) -> list[LayoutRegion]:
@@ -393,3 +503,20 @@ def _region_id_factory():
         return f"r{counter:03d}"
 
     return next_id
+
+
+class _DisjointSet:
+    def __init__(self, size: int):
+        self.parents = list(range(size))
+
+    def find(self, item: int) -> int:
+        parent = self.parents[item]
+        if parent != item:
+            self.parents[item] = self.find(parent)
+        return self.parents[item]
+
+    def union(self, left: int, right: int) -> None:
+        left_root = self.find(left)
+        right_root = self.find(right)
+        if left_root != right_root:
+            self.parents[right_root] = left_root
