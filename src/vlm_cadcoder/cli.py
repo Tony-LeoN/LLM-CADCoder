@@ -78,6 +78,31 @@ def build_cadquery_draft_cli(args: argparse.Namespace) -> None:
     print(f"Wrote CadQuery draft script to {result.script_path}")
 
 
+def generate_cadquery_llm_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.cad.llm_cadquery import generate_cadquery_with_llm
+
+    result = generate_cadquery_with_llm(
+        sample_id=args.sample_id,
+        model_name=args.model,
+        dataflow_root=args.dataflow_root,
+        model_config_path=args.model_config,
+        input_set=args.input_set,
+        output_set=args.output_set,
+        max_new_tokens=args.max_new_tokens,
+    )
+    print(f"Wrote raw LLM response to {result.raw_response_path}")
+    print(f"Wrote sanitized CadQuery script to {result.script_path}")
+    if result.error:
+        print(f"Model error: {result.error}")
+
+
+def sanitize_cadquery_llm_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.cad.llm_cadquery import sanitize_cadquery_file
+
+    path = sanitize_cadquery_file(args.input, args.output)
+    print(f"Wrote sanitized CadQuery script to {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="vlm-cadcoder")
     subparsers = parser.add_subparsers(required=True)
@@ -120,6 +145,21 @@ def main() -> None:
     cadquery_parser.add_argument("--output-set", default="testView2CAD")
     cadquery_parser.add_argument("--part-family", default="rectangular_plate")
     cadquery_parser.set_defaults(func=build_cadquery_draft_cli)
+
+    generate_parser = subparsers.add_parser("generate-cadquery-llm")
+    generate_parser.add_argument("--sample-id", required=True)
+    generate_parser.add_argument("--model", default="qwen2_5_vl_3b")
+    generate_parser.add_argument("--dataflow-root", default="DataFlow")
+    generate_parser.add_argument("--model-config", default="configs/models.json")
+    generate_parser.add_argument("--input-set", default="testView2CAD")
+    generate_parser.add_argument("--output-set", default="testView2CAD")
+    generate_parser.add_argument("--max-new-tokens", type=int, default=4096)
+    generate_parser.set_defaults(func=generate_cadquery_llm_cli)
+
+    sanitize_parser = subparsers.add_parser("sanitize-cadquery-llm")
+    sanitize_parser.add_argument("--input", required=True)
+    sanitize_parser.add_argument("--output")
+    sanitize_parser.set_defaults(func=sanitize_cadquery_llm_cli)
 
     args = parser.parse_args()
     args.func(args)

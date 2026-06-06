@@ -415,6 +415,30 @@ DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_parameters.json
 DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_draft.py
 ```
 
+也可以让服务器上的 VLM/LLM 基于 `cadquery_generation_prompt.md`、clean 图和 external crops 直接生成 CadQuery 代码：
+
+```bash
+python -m vlm_cadcoder.cli generate-cadquery-llm \
+  --sample-id 2023-2024-1-923 \
+  --model qwen2_5_vl_3b \
+  --dataflow-root DataFlow \
+  --max-new-tokens 4096
+```
+
+该命令会保存原始模型输出，并自动剥离 markdown fence、规范化 CadQuery import 和 STEP export：
+
+```text
+DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_llm_generated.raw.md
+DataFlow/11.CADProgram/testView2CAD/<sample_id>/cadquery_llm_generated.py
+```
+
+如果已有模型输出包含 markdown fence 或错误 import，可只做后处理：
+
+```bash
+python -m vlm_cadcoder.cli sanitize-cadquery-llm \
+  --input DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_llm_generated.py
+```
+
 该流程属于原型闭环：可以验证单视图/多视图 crops 是否足以支撑 CadQuery 代码生成，但不能替代正式的自动视图检测、尺寸-几何绑定和约束图评测。
 
 ## 12 软硬件环境
