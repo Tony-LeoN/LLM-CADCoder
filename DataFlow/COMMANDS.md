@@ -44,7 +44,7 @@ $env:PYTHONPATH="src"
 | --- | --- | --- |
 | `01 -> sample index` | 已实现 | 扫描 PDF/STEP 配对，生成 `data/samples.csv` |
 | `01 -> 02` | 已实现 | 单个或批量 PDF 渲染为 PNG |
-| `02 -> 03/04` | 已实现 | 页面级 layout 分析与 clean PNG |
+| `02 -> 03/04` | 已实现 | 单图或批量页面级 layout 分析与 clean PNG |
 | `04 -> 05` | 待接入 | 计划接入 SketchSegment `ViewBlockDetector` |
 | `05 -> 06` | 待接入 | 根据视图 bbox 裁剪单视图 |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
@@ -206,6 +206,62 @@ python -m vlm_cadcoder.cli clean-layout \
 
 - 默认会保存 removed-region crops 和 overlay；
 - `04.CleanPNG` 保持原图尺寸，只白掉需要移除的区域，因此后续 bbox 坐标仍可与原图对齐。
+
+批量处理 `02.RawPNG` 下所有已渲染页面：
+
+```bash
+python -m vlm_cadcoder.cli clean-layout-batch \
+  --raw-png-dir DataFlow/02.RawPNG \
+  --dataflow-root DataFlow \
+  --dpi 600
+```
+
+批量处理并跳过已经存在的 clean page：
+
+```bash
+python -m vlm_cadcoder.cli clean-layout-batch \
+  --raw-png-dir DataFlow/02.RawPNG \
+  --dataflow-root DataFlow \
+  --dpi 600 \
+  --skip-existing
+```
+
+如果只想生成 clean page 和 mask，不保存 overlay 或 removed-region crops：
+
+```bash
+python -m vlm_cadcoder.cli clean-layout-batch \
+  --raw-png-dir DataFlow/02.RawPNG \
+  --dataflow-root DataFlow \
+  --dpi 600 \
+  --no-save-crops \
+  --no-save-overlay
+```
+
+批量命令输出示例：
+
+```text
+Cleaned 20 page(s); skipped 0; failed 0
+[cleaned] X350-05-070-A page 001: 4 removable region(s)
+```
+
+参数说明：
+
+- `--raw-png-dir`：输入 RawPNG 根目录，默认 `DataFlow/02.RawPNG`；
+- `--dataflow-root`：DataFlow 根目录；
+- `--dpi`：只处理匹配 `page_*_<dpi>dpi.png` 的页面；
+- `--skip-existing`：如果 `04.CleanPNG/<sample_id>/page_<n>_clean.png` 已存在，则跳过；
+- `--no-save-crops`：不保存被移除表格/边框区域的 crops；
+- `--no-save-overlay`：不保存 layout overlay；
+- `--fail-fast`：任一页面处理失败时立即停止。
+
+批量命令会从目录结构推断 `sample_id` 和页码：
+
+```text
+DataFlow/02.RawPNG/X350-05-070-A/page_001_600dpi.png
+-> sample_id = X350-05-070-A
+-> page = 1
+-> output_stem = page_001
+```
 
 ## 4. `04.CleanPNG -> 05.ViewDetection`
 
@@ -575,7 +631,6 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
 建议下一步补齐以下 CLI：
 
 ```text
-clean-layout-batch
 detect-views
 export-single-views
 classify-views

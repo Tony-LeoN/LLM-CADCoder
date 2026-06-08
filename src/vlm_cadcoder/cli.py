@@ -74,6 +74,37 @@ def clean_layout(args: argparse.Namespace) -> None:
     print(f"Detected {len(result.regions)} removable layout regions")
 
 
+def clean_layout_batch(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.layout_batch import clean_layout_directory
+
+    summary = clean_layout_directory(
+        raw_png_dir=args.raw_png_dir,
+        dataflow_root=args.dataflow_root,
+        dpi=args.dpi,
+        skip_existing=args.skip_existing,
+        save_crops=args.save_crops,
+        save_overlay=args.save_overlay,
+        fail_fast=args.fail_fast,
+    )
+    print(
+        f"Cleaned {summary.cleaned_count} page(s); "
+        f"skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    for record in summary.records:
+        prefix = "[cleaned]"
+        detail = f"{record.regions} removable region(s)"
+        if record.error:
+            prefix = "[failed]"
+            detail = record.error
+        elif record.skipped:
+            prefix = "[skipped]"
+            detail = "existing clean page"
+        print(f"{prefix} {record.sample_id} page {record.page:03d}: {detail}")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -169,6 +200,16 @@ def main() -> None:
     clean_parser.add_argument("--save-crops", action=argparse.BooleanOptionalAction, default=True)
     clean_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
     clean_parser.set_defaults(func=clean_layout)
+
+    clean_batch_parser = subparsers.add_parser("clean-layout-batch")
+    clean_batch_parser.add_argument("--raw-png-dir", default="DataFlow/02.RawPNG")
+    clean_batch_parser.add_argument("--dataflow-root", default="DataFlow")
+    clean_batch_parser.add_argument("--dpi", type=int, default=600)
+    clean_batch_parser.add_argument("--skip-existing", action="store_true")
+    clean_batch_parser.add_argument("--save-crops", action=argparse.BooleanOptionalAction, default=True)
+    clean_batch_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
+    clean_batch_parser.add_argument("--fail-fast", action="store_true")
+    clean_batch_parser.set_defaults(func=clean_layout_batch)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
