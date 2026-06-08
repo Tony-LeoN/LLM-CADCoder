@@ -2,6 +2,8 @@
 
 `DataFlow` stores generated artifacts, not source code. Keep source code under `src/vlm_cadcoder`.
 
+For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
+
 ## Stages
 
 1. `01.RawPDFWithSTEP`
