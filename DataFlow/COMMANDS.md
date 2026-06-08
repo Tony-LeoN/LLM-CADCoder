@@ -43,7 +43,7 @@ $env:PYTHONPATH="src"
 | 阶段转换 | 状态 | 说明 |
 | --- | --- | --- |
 | `01 -> sample index` | 已实现 | 扫描 PDF/STEP 配对，生成 `data/samples.csv` |
-| `01 -> 02` | 已实现 | PDF 渲染为 PNG |
+| `01 -> 02` | 已实现 | 单个或批量 PDF 渲染为 PNG |
 | `02 -> 03/04` | 已实现 | 页面级 layout 分析与 clean PNG |
 | `04 -> 05` | 待接入 | 计划接入 SketchSegment `ViewBlockDetector` |
 | `05 -> 06` | 待接入 | 根据视图 bbox 裁剪单视图 |
@@ -105,11 +105,65 @@ DataFlow/02.RawPNG/X350-05-070-A/page_001_600dpi.meta.json
 - `--pdf`：输入 PDF 路径；
 - `--sample-id`：样本 ID，建议与 PDF 文件名 stem 一致；
 - `--dpi`：渲染分辨率，当前推荐 600；
-- `--skip-multipage`：跳过多页 PDF 的后续页面，仅渲染第一页。
+- `--skip-multipage`：如果 PDF 不是单页，则跳过该 PDF。
 
 如果要渲染多页 PDF，去掉 `--skip-multipage`。
 
-批量渲染目前尚未封装正式 CLI。可先按 `data/samples.csv` 中的 PDF 逐个运行该命令；后续可补一个 `render-pdf-batch`。
+批量处理 `01.RawPDFWithSTEP` 下所有 PDF：
+
+```bash
+python -m vlm_cadcoder.cli render-pdf-batch \
+  --raw-dir DataFlow/01.RawPDFWithSTEP \
+  --dataflow-root DataFlow \
+  --dpi 600 \
+  --skip-multipage
+```
+
+批量处理并跳过已经存在的第一页 PNG：
+
+```bash
+python -m vlm_cadcoder.cli render-pdf-batch \
+  --raw-dir DataFlow/01.RawPDFWithSTEP \
+  --dataflow-root DataFlow \
+  --dpi 600 \
+  --skip-multipage \
+  --skip-existing
+```
+
+如果 `01.RawPDFWithSTEP` 下还有子目录，也希望递归扫描 PDF：
+
+```bash
+python -m vlm_cadcoder.cli render-pdf-batch \
+  --raw-dir DataFlow/01.RawPDFWithSTEP \
+  --dataflow-root DataFlow \
+  --dpi 600 \
+  --skip-multipage \
+  --recursive
+```
+
+批量命令输出示例：
+
+```text
+Rendered 20 PDFs / 20 pages; skipped 0; failed 0
+[rendered] X350-05-070-A: 1 page(s)
+```
+
+参数说明：
+
+- `--raw-dir`：输入 PDF 根目录；
+- `--dataflow-root`：DataFlow 根目录；
+- `--dpi`：渲染分辨率；
+- `--skip-multipage`：遇到多页 PDF 时跳过该 PDF；
+- `--skip-existing`：如果 `02.RawPNG/<sample_id>/page_001_<dpi>dpi.png` 已存在，则跳过；
+- `--recursive`：递归扫描子目录中的 PDF；
+- `--fail-fast`：任一 PDF 渲染失败时立即停止。
+
+递归模式下，子目录 PDF 的 `sample_id` 会使用相对路径拼接，例如：
+
+```text
+DataFlow/01.RawPDFWithSTEP/testView2CAD/A.pdf
+-> sample_id = testView2CAD__A
+```
 
 ## 3. `02.RawPNG -> 03.LayoutAnalysis + 04.CleanPNG`
 
@@ -521,7 +575,6 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
 建议下一步补齐以下 CLI：
 
 ```text
-render-pdf-batch
 clean-layout-batch
 detect-views
 export-single-views

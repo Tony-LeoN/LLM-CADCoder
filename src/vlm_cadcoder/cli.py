@@ -27,6 +27,36 @@ def render_pdf(args: argparse.Namespace) -> None:
     print(f"Rendered {len(rendered)} pages")
 
 
+def render_pdf_batch(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.pdf_batch import render_pdf_directory
+
+    store = ArtifactStore(DataFlowPaths(root=Path(args.dataflow_root)))
+    summary = render_pdf_directory(
+        raw_dir=args.raw_dir,
+        store=store,
+        dpi=args.dpi,
+        skip_multipage=args.skip_multipage,
+        skip_existing=args.skip_existing,
+        recursive=args.recursive,
+        fail_fast=args.fail_fast,
+    )
+    print(
+        "Rendered "
+        f"{summary.rendered_pdf_count} PDFs / {summary.rendered_page_count} pages; "
+        f"skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    for record in summary.records:
+        if record.error:
+            print(f"[failed] {record.sample_id}: {record.error}")
+        elif record.skipped:
+            print(f"[skipped] {record.sample_id}")
+        else:
+            print(f"[rendered] {record.sample_id}: {record.rendered_pages} page(s)")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def clean_layout(args: argparse.Namespace) -> None:
     from vlm_cadcoder.dataflow.layout_clean import clean_layout_page
 
@@ -119,6 +149,16 @@ def main() -> None:
     render_parser.add_argument("--dpi", type=int, default=600)
     render_parser.add_argument("--skip-multipage", action="store_true")
     render_parser.set_defaults(func=render_pdf)
+
+    render_batch_parser = subparsers.add_parser("render-pdf-batch")
+    render_batch_parser.add_argument("--raw-dir", default="DataFlow/01.RawPDFWithSTEP")
+    render_batch_parser.add_argument("--dataflow-root", default="DataFlow")
+    render_batch_parser.add_argument("--dpi", type=int, default=600)
+    render_batch_parser.add_argument("--skip-multipage", action="store_true")
+    render_batch_parser.add_argument("--skip-existing", action="store_true")
+    render_batch_parser.add_argument("--recursive", action="store_true")
+    render_batch_parser.add_argument("--fail-fast", action="store_true")
+    render_batch_parser.set_defaults(func=render_pdf_batch)
 
     clean_parser = subparsers.add_parser("clean-layout")
     clean_parser.add_argument("--image", required=True)
