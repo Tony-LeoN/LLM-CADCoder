@@ -37,15 +37,13 @@ class LayoutCleanConfig:
     max_revision_height_ratio: float = 0.085
     max_revision_area_ratio: float = 0.025
     max_hole_table_width_ratio: float = 0.56
+    technical_block_min_y_ratio: float = 0.68
+    technical_block_max_x_ratio: float = 0.45
+    technical_block_anchor_max_x_ratio: float = 0.18
     technical_block_min_width_ratio: float = 0.04
     technical_block_min_height_ratio: float = 0.035
-    technical_block_max_area_ratio: float = 0.18
-    technical_block_min_line_count: int = 3
     technical_block_column_gap_px: int = 140
     technical_block_row_gap_px: int = 70
-    technical_block_line_gap_px: int = 6
-    technical_block_row_min_pixels: int = 2
-    technical_block_col_min_pixels: int = 2
     technical_block_long_h_ratio: float = 0.12
     technical_block_long_v_ratio: float = 0.12
     technical_block_min_pixels: int = 80
@@ -148,7 +146,7 @@ def clean_layout_page(
             "coordinate_system": "image_xy_top_left",
             "method": {
                 "name": "rule_based_line_component_layout_cleaner",
-                "version": "0.4.0",
+                "version": "0.3.0",
                 "config": cfg.__dict__,
             },
             "regions": region_dicts,
@@ -204,7 +202,7 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
                 metadata=meta,
             )
         )
-    regions.extend(_detect_technical_requirement_regions(neutral_dark, width, height, cfg, next_id, regions))
+    regions.extend(_detect_technical_requirement_regions(neutral_dark, width, height, cfg, next_id))
     return _deduplicate_regions(regions)
 
 
@@ -540,105 +538,79 @@ def _detect_technical_requirement_regions(
     height: int,
     cfg: LayoutCleanConfig,
     next_id,
-    existing_regions: list[LayoutRegion],
 ) -> list[LayoutRegion]:
     import numpy as np
 
-    text_mask = neutral_dark.copy()
-    _clear_existing_layout_regions(text_mask, existing_regions)
-    _remove_long_runs_from_mask(text_mask, "h", max(12, int(width * cfg.technical_block_long_h_ratio)))
-    _remove_long_runs_from_mask(text_mask, "v", max(12, int(height * cfg.technical_block_long_v_ratio)))
-
-    if int(text_mask.sum()) < cfg.technical_block_min_pixels:
+    y_offset = int(height * cfg.technical_block_min_y_ratio)
+    x_limit = int(width * cfg.technical_block_max_x_ratio)
+    y_limit = height - int(height * cfg.edge_margin_ratio)
+    if y_offset >= y_limit or x_limit <= 0:
         return []
 
-    row_counts = np.asarray(text_mask.sum(axis=1)).reshape(-1)
-    active_rows = (row_counts >= cfg.technical_block_row_min_pixels).nonzero()[0]
-    if active_rows.size == 0:
+    local = neutral_dark[y_offset:y_limit, :x_limit].copy()
+    _remove_long_runs_from_mask(local, "h", max(12, int(width * cfg.technical_block_long_h_ratio)))
+    _remove_long_runs_from_mask(local, "v", max(12, int(height * cfg.technical_block_long_v_ratio)))
+
+    if int(local.sum()) < cfg.technical_block_min_pixels:
         return []
 
-    row_gap = max(cfg.technical_block_row_gap_px, int(height * 0.014))
-    col_gap = max(cfg.technical_block_column_gap_px, int(width * 0.02))
-    line_gap = max(cfg.technical_block_line_gap_px, int(height * 0.003))
+    col_counts = np.asarray(local.sum(axis=0)).reshape(-1)
+    active_cols = (col_counts >= 2).nonzero()[0]
+    if active_cols.size == 0:
+        return []
+
+    col_groups = _group_sorted_indices(active_cols.tolist(), cfg.technical_block_column_gap_px)
+    anchor_limit = int(width * cfg.technical_block_anchor_max_x_ratio)
     min_width = int(width * cfg.technical_block_min_width_ratio)
     min_height = int(height * cfg.technical_block_min_height_ratio)
-    max_area = int(width * height * cfg.technical_block_max_area_ratio)
 
     candidates: list[BBox] = []
-    for row_group in _group_sorted_indices(active_rows.tolist(), row_gap):
-        y1 = row_group[0]
-        y2 = row_group[-1] + 1
-        if y2 - y1 < min_height:
+    for col_group in col_groups:
+        x1 = col_group[0]
+        x2 = col_group[-1] + 1
+        if x1 > anchor_limit or x2 - x1 < min_width:
             continue
-        row_band = text_mask[y1:y2, :]
-        col_counts = np.asarray(row_band.sum(axis=0)).reshape(-1)
-        active_cols = (col_counts >= cfg.technical_block_col_min_pixels).nonzero()[0]
-        if active_cols.size == 0:
+        cluster = local[:, x1:x2]
+        row_counts = np.asarray(cluster.sum(axis=1)).reshape(-1)
+        active_rows = (row_counts >= 2).nonzero()[0]
+        if active_rows.size == 0:
             continue
-        for col_group in _group_sorted_indices(active_cols.tolist(), col_gap):
-            x1 = col_group[0]
-            x2 = col_group[-1] + 1
-            if x2 - x1 < min_width:
+        for row_group in _group_sorted_indices(active_rows.tolist(), cfg.technical_block_row_gap_px):
+            y1 = row_group[0]
+            y2 = row_group[-1] + 1
+            if y2 - y1 < min_height:
                 continue
-            candidate_mask = row_band[:, x1:x2]
-            pixels_y, pixels_x = np.nonzero(candidate_mask)
+            pixels_y, pixels_x = np.nonzero(cluster[y1:y2, :])
             if pixels_x.size < cfg.technical_block_min_pixels:
                 continue
-            bbox = BBox(
-                x1 + int(pixels_x.min()),
-                y1 + int(pixels_y.min()),
-                x1 + int(pixels_x.max()) + 1,
-                y1 + int(pixels_y.max()) + 1,
+            candidates.append(
+                BBox(
+                    x1 + int(pixels_x.min()),
+                    y_offset + y1 + int(pixels_y.min()),
+                    x1 + int(pixels_x.max()) + 1,
+                    y_offset + y1 + int(pixels_y.max()) + 1,
+                )
             )
-            if bbox.height < min_height or bbox.area > max_area:
-                continue
-            if _count_text_lines(candidate_mask, cfg.technical_block_row_min_pixels, line_gap) < cfg.technical_block_min_line_count:
-                continue
-            candidates.append(bbox)
 
     if not candidates:
         return []
 
-    regions: list[LayoutRegion] = []
-    for bbox in candidates:
-        padded = bbox.pad(cfg.region_padding_px, width, height)
-        regions.append(
-            LayoutRegion(
-                region_id=next_id(),
-                region_type="technical_requirements",
-                bbox=padded,
-                action="remove_from_clean_page",
-                preserve_as_crop=True,
-                confidence=0.78,
-                source="full_page_text_block_rules",
-                metadata={
-                    "bbox_area_ratio": round(padded.area / (width * height), 6),
-                    "text_lines": _count_text_lines(
-                        text_mask[padded.y1 : padded.y2, padded.x1 : padded.x2],
-                        cfg.technical_block_row_min_pixels,
-                        line_gap,
-                    ),
-                },
-            )
+    bbox = _merge_bboxes(candidates).pad(cfg.region_padding_px, width, height)
+    return [
+        LayoutRegion(
+            region_id=next_id(),
+            region_type="technical_requirements",
+            bbox=bbox,
+            action="remove_from_clean_page",
+            preserve_as_crop=True,
+            confidence=0.78,
+            source="bottom_left_text_block_rules",
+            metadata={
+                "bbox_area_ratio": round(bbox.area / (width * height), 6),
+                "candidate_blocks": len(candidates),
+            },
         )
-    return regions
-
-
-def _clear_existing_layout_regions(mask, regions: list[LayoutRegion]) -> None:
-    excluded_types = {"page_border", "hole_table", "title_or_tolerance_table", "revision_table"}
-    for region in regions:
-        if region.region_type not in excluded_types:
-            continue
-        bbox = region.bbox
-        mask[bbox.y1 : bbox.y2, bbox.x1 : bbox.x2] = False
-
-
-def _count_text_lines(mask, min_row_pixels: int, max_gap: int) -> int:
-    import numpy as np
-
-    row_counts = np.asarray(mask.sum(axis=1)).reshape(-1)
-    active_rows = (row_counts >= min_row_pixels).nonzero()[0]
-    return len(_group_sorted_indices(active_rows.tolist(), max_gap))
+    ]
 
 
 def _remove_long_runs_from_mask(mask, axis: str, min_length: int) -> None:

@@ -93,43 +93,6 @@ def test_bottom_left_technical_requirements_are_extracted_as_text_block() -> Non
     assert technical_regions[0].bbox.y1 < 540
 
 
-def test_right_side_technical_requirements_are_extracted_without_fixed_position() -> None:
-    image = Image.new("RGB", (1000, 700), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((80, 120, 420, 430), outline="black", width=2)
-    draw.multiline_text(
-        (640, 130),
-        "技术条件:\n1. 所有锐边倒钝.\n2. 表面不得有划伤.\n3. 未注公差按图纸要求.",
-        fill="black",
-        spacing=8,
-    )
-    _draw_table(draw, (420, 560, 960, 680), rows=5, cols=8)
-
-    regions = detect_layout_regions(image)
-    technical_regions = [region for region in regions if region.region_type == "technical_requirements"]
-
-    assert len(technical_regions) == 1
-    assert technical_regions[0].bbox.x1 > 600
-    assert technical_regions[0].bbox.y1 < 160
-
-
-def test_sparse_dimension_text_is_not_extracted_as_technical_requirements() -> None:
-    image = Image.new("RGB", (1000, 700), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((160, 140, 500, 430), outline="black", width=2)
-    draw.line((120, 180, 540, 180), fill="black", width=2)
-    draw.line((120, 280, 540, 280), fill="black", width=2)
-    draw.line((120, 380, 540, 380), fill="black", width=2)
-    draw.text((250, 160), "190", fill="black")
-    draw.text((260, 260), "90", fill="black")
-    draw.text((280, 360), "4-C2", fill="black")
-    _draw_table(draw, (450, 560, 960, 680), rows=5, cols=8)
-
-    regions = detect_layout_regions(image)
-
-    assert [region for region in regions if region.region_type == "technical_requirements"] == []
-
-
 def _draw_table(
     draw: ImageDraw.ImageDraw,
     box: tuple[int, int, int, int],
