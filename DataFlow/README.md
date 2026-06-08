@@ -80,7 +80,7 @@ Current removable region types:
 - `hole_table`: left-side hole/coordinate table
 - `title_or_tolerance_table`: bottom title block and general tolerance tables
 - `revision_table`: top-right revision table
-- `technical_requirements`: bottom-left technical requirement text block
+- `technical_requirements`: page-level multiline technical requirement or technical condition text block
 
 The clean image should mainly preserve drawing views and view-related annotations: dimensions, leader callouts, surface roughness callouts, geometric tolerances, and local view notes. Detected tables and page-level technical requirement blocks are removed from the clean page but preserved as typed crops in `03.LayoutAnalysis/<sample>/regions`, so later stages can still extract richer drawing metadata from title blocks, revision tables, hole tables, tolerance tables, and technical requirements.
 
