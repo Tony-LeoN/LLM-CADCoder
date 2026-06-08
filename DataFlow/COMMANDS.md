@@ -167,7 +167,7 @@ DataFlow/01.RawPDFWithSTEP/testView2CAD/A.pdf
 
 ## 3. `02.RawPNG -> 03.LayoutAnalysis + 04.CleanPNG`
 
-用途：对整张 PNG 做页面级 layout 分析，去除外边框、标题栏、孔表、版本表等非视图区信息，同时保留被移除区域 crop 供后续语义抽取。
+用途：对整张 PNG 做页面级 layout 分析，去除外边框、标题栏、孔表、版本表、技术要求等非视图区信息，同时保留被移除区域 crop 供后续语义抽取。
 
 命令：
 

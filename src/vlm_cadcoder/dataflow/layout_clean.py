@@ -25,14 +25,28 @@ class LayoutCleanConfig:
     bottom_table_min_y2_ratio: float = 0.92
     bottom_table_min_width_ratio: float = 0.25
     bottom_table_min_area_ratio: float = 0.01
+    bottom_table_search_min_y_ratio: float = 0.62
+    bottom_table_max_height_ratio: float = 0.38
+    bottom_table_max_area_ratio: float = 0.32
     revision_min_x_ratio: float = 0.62
     revision_max_y_ratio: float = 0.16
     min_grid_segments: int = 8
     min_grid_intersections: int = 4
     component_gap_px: int = 14
+    component_frame_margin_ratio: float = 0.04
     max_revision_height_ratio: float = 0.085
     max_revision_area_ratio: float = 0.025
     max_hole_table_width_ratio: float = 0.56
+    technical_block_min_y_ratio: float = 0.68
+    technical_block_max_x_ratio: float = 0.45
+    technical_block_anchor_max_x_ratio: float = 0.18
+    technical_block_min_width_ratio: float = 0.04
+    technical_block_min_height_ratio: float = 0.035
+    technical_block_column_gap_px: int = 140
+    technical_block_row_gap_px: int = 70
+    technical_block_long_h_ratio: float = 0.12
+    technical_block_long_v_ratio: float = 0.12
+    technical_block_min_pixels: int = 80
 
 
 @dataclass(frozen=True)
@@ -132,7 +146,7 @@ def clean_layout_page(
             "coordinate_system": "image_xy_top_left",
             "method": {
                 "name": "rule_based_line_component_layout_cleaner",
-                "version": "0.2.1",
+                "version": "0.3.0",
                 "config": cfg.__dict__,
             },
             "regions": region_dicts,
@@ -173,7 +187,9 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
     next_id = _region_id_factory()
     regions.extend(_detect_border_strips(h_segments, v_segments, width, height, cfg, next_id))
     components = _build_line_components(h_segments + v_segments, width, height, cfg)
-    for region_type, bbox, confidence, meta in _detect_table_regions(components, rgb, width, height, cfg):
+    table_candidates = _detect_table_regions(components, rgb, width, height, cfg)
+    table_candidates.extend(_detect_bottom_table_band_regions(h_segments, v_segments, rgb, width, height, cfg))
+    for region_type, bbox, confidence, meta in table_candidates:
         regions.append(
             LayoutRegion(
                 region_id=next_id(),
@@ -186,6 +202,7 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
                 metadata=meta,
             )
         )
+    regions.extend(_detect_technical_requirement_regions(neutral_dark, width, height, cfg, next_id))
     return _deduplicate_regions(regions)
 
 
@@ -211,6 +228,7 @@ def draw_overlay(image: Image.Image, regions: Iterable[LayoutRegion]) -> Image.I
         "hole_table": (255, 128, 0),
         "title_or_tolerance_table": (180, 0, 255),
         "revision_table": (0, 160, 255),
+        "technical_requirements": (0, 170, 80),
     }
     for region in regions:
         color = colors.get(region.region_type, (0, 200, 0))
@@ -345,6 +363,59 @@ def _detect_table_regions(
     return regions
 
 
+def _detect_bottom_table_band_regions(
+    h_segments: list[LineSegment],
+    v_segments: list[LineSegment],
+    rgb,
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+) -> list[tuple[str, BBox, float, dict[str, int | float]]]:
+    min_y = int(height * cfg.bottom_table_search_min_y_ratio)
+    bottom_h = [segment for segment in h_segments if segment.y1 >= min_y]
+    bottom_v = [segment for segment in v_segments if segment.y1 >= min_y]
+    components = _build_line_components(bottom_h + bottom_v, width, height, cfg)
+    regions: list[tuple[str, BBox, float, dict[str, int | float]]] = []
+    for component in components:
+        h_count = len(component.horizontal_segments)
+        v_count = len(component.vertical_segments)
+        if h_count < 4 or v_count < 4 or h_count + v_count < cfg.min_grid_segments:
+            continue
+        bbox = component.bbox.clamp(width, height)
+        intersections = _count_intersections(component.horizontal_segments, component.vertical_segments, cfg.component_gap_px)
+        if intersections < cfg.min_grid_intersections:
+            continue
+        width_ratio = bbox.width / width
+        height_ratio = bbox.height / height
+        area_ratio = bbox.area / (width * height)
+        y1_ratio = bbox.y1 / height
+        y2_ratio = bbox.y2 / height
+        if not (
+            y1_ratio >= cfg.bottom_table_search_min_y_ratio
+            and y2_ratio >= cfg.bottom_table_min_y2_ratio
+            and width_ratio >= cfg.bottom_table_min_width_ratio
+            and height_ratio <= cfg.bottom_table_max_height_ratio
+            and cfg.bottom_table_min_area_ratio <= area_ratio <= cfg.bottom_table_max_area_ratio
+        ):
+            continue
+        confidence = min(0.96, 0.62 + 0.008 * min(h_count + v_count, 35) + 0.008 * min(intersections, 10))
+        regions.append(
+            (
+                "title_or_tolerance_table",
+                bbox,
+                confidence,
+                {
+                    "horizontal_segments": h_count,
+                    "vertical_segments": v_count,
+                    "intersections": intersections,
+                    "bbox_area_ratio": round(area_ratio, 6),
+                    "source_detector": "bottom_band_grid_rules",
+                },
+            )
+        )
+    return regions
+
+
 def _build_line_components(
     segments: list[LineSegment],
     width: int,
@@ -429,8 +500,11 @@ def _classify_table_component(
 
     if (
         (y1_ratio >= cfg.bottom_table_min_y_ratio or y2_ratio >= cfg.bottom_table_min_y2_ratio)
+        and y1_ratio >= cfg.bottom_table_search_min_y_ratio
         and width_ratio >= cfg.bottom_table_min_width_ratio
         and area_ratio >= cfg.bottom_table_min_area_ratio
+        and area_ratio <= cfg.bottom_table_max_area_ratio
+        and height_ratio <= cfg.bottom_table_max_height_ratio
         and h_count >= 6
         and v_count >= 6
     ):
@@ -451,11 +525,129 @@ def _classify_table_component(
 
 
 def _is_page_frame_segment(segment: LineSegment, width: int, height: int, cfg: LayoutCleanConfig) -> bool:
-    margin_x = int(width * cfg.edge_margin_ratio)
-    margin_y = int(height * cfg.edge_margin_ratio)
+    margin_x = int(width * max(cfg.edge_margin_ratio, cfg.component_frame_margin_ratio))
+    margin_y = int(height * max(cfg.edge_margin_ratio, cfg.component_frame_margin_ratio))
     if segment.axis == "h":
         return segment.length >= width * 0.75 and (segment.y1 <= margin_y or segment.y2 >= height - margin_y)
     return segment.length >= height * 0.75 and (segment.x1 <= margin_x or segment.x2 >= width - margin_x)
+
+
+def _detect_technical_requirement_regions(
+    neutral_dark,
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+    next_id,
+) -> list[LayoutRegion]:
+    import numpy as np
+
+    y_offset = int(height * cfg.technical_block_min_y_ratio)
+    x_limit = int(width * cfg.technical_block_max_x_ratio)
+    y_limit = height - int(height * cfg.edge_margin_ratio)
+    if y_offset >= y_limit or x_limit <= 0:
+        return []
+
+    local = neutral_dark[y_offset:y_limit, :x_limit].copy()
+    _remove_long_runs_from_mask(local, "h", max(12, int(width * cfg.technical_block_long_h_ratio)))
+    _remove_long_runs_from_mask(local, "v", max(12, int(height * cfg.technical_block_long_v_ratio)))
+
+    if int(local.sum()) < cfg.technical_block_min_pixels:
+        return []
+
+    col_counts = np.asarray(local.sum(axis=0)).reshape(-1)
+    active_cols = (col_counts >= 2).nonzero()[0]
+    if active_cols.size == 0:
+        return []
+
+    col_groups = _group_sorted_indices(active_cols.tolist(), cfg.technical_block_column_gap_px)
+    anchor_limit = int(width * cfg.technical_block_anchor_max_x_ratio)
+    min_width = int(width * cfg.technical_block_min_width_ratio)
+    min_height = int(height * cfg.technical_block_min_height_ratio)
+
+    candidates: list[BBox] = []
+    for col_group in col_groups:
+        x1 = col_group[0]
+        x2 = col_group[-1] + 1
+        if x1 > anchor_limit or x2 - x1 < min_width:
+            continue
+        cluster = local[:, x1:x2]
+        row_counts = np.asarray(cluster.sum(axis=1)).reshape(-1)
+        active_rows = (row_counts >= 2).nonzero()[0]
+        if active_rows.size == 0:
+            continue
+        for row_group in _group_sorted_indices(active_rows.tolist(), cfg.technical_block_row_gap_px):
+            y1 = row_group[0]
+            y2 = row_group[-1] + 1
+            if y2 - y1 < min_height:
+                continue
+            pixels_y, pixels_x = np.nonzero(cluster[y1:y2, :])
+            if pixels_x.size < cfg.technical_block_min_pixels:
+                continue
+            candidates.append(
+                BBox(
+                    x1 + int(pixels_x.min()),
+                    y_offset + y1 + int(pixels_y.min()),
+                    x1 + int(pixels_x.max()) + 1,
+                    y_offset + y1 + int(pixels_y.max()) + 1,
+                )
+            )
+
+    if not candidates:
+        return []
+
+    bbox = _merge_bboxes(candidates).pad(cfg.region_padding_px, width, height)
+    return [
+        LayoutRegion(
+            region_id=next_id(),
+            region_type="technical_requirements",
+            bbox=bbox,
+            action="remove_from_clean_page",
+            preserve_as_crop=True,
+            confidence=0.78,
+            source="bottom_left_text_block_rules",
+            metadata={
+                "bbox_area_ratio": round(bbox.area / (width * height), 6),
+                "candidate_blocks": len(candidates),
+            },
+        )
+    ]
+
+
+def _remove_long_runs_from_mask(mask, axis: str, min_length: int) -> None:
+    if axis == "h":
+        for y, row in enumerate(mask):
+            starts, ends = _runs_1d(row)
+            for x1, x2 in zip(starts, ends):
+                if x2 - x1 >= min_length:
+                    mask[y, x1:x2] = False
+        return
+
+    for x, col in enumerate(mask.T):
+        starts, ends = _runs_1d(col)
+        for y1, y2 in zip(starts, ends):
+            if y2 - y1 >= min_length:
+                mask[y1:y2, x] = False
+
+
+def _group_sorted_indices(values: list[int], max_gap: int) -> list[list[int]]:
+    if not values:
+        return []
+    groups = [[values[0]]]
+    for value in values[1:]:
+        if value - groups[-1][-1] <= max_gap:
+            groups[-1].append(value)
+        else:
+            groups.append([value])
+    return groups
+
+
+def _merge_bboxes(bboxes: list[BBox]) -> BBox:
+    return BBox(
+        x1=min(bbox.x1 for bbox in bboxes),
+        y1=min(bbox.y1 for bbox in bboxes),
+        x2=max(bbox.x2 for bbox in bboxes),
+        y2=max(bbox.y2 for bbox in bboxes),
+    )
 
 
 def _segments_bbox(segments: list[LineSegment]) -> BBox:

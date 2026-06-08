@@ -80,8 +80,9 @@ Current removable region types:
 - `hole_table`: left-side hole/coordinate table
 - `title_or_tolerance_table`: bottom title block and general tolerance tables
 - `revision_table`: top-right revision table
+- `technical_requirements`: bottom-left technical requirement text block
 
-The clean image should mainly preserve drawing views and view-related annotations: dimensions, leader callouts, surface roughness callouts, geometric tolerances, and local technical notes. Detected tables are removed from the clean page but preserved as typed crops in `03.LayoutAnalysis/<sample>/regions`, so later stages can still extract richer drawing metadata from title blocks, revision tables, hole tables, and tolerance tables.
+The clean image should mainly preserve drawing views and view-related annotations: dimensions, leader callouts, surface roughness callouts, geometric tolerances, and local view notes. Detected tables and page-level technical requirement blocks are removed from the clean page but preserved as typed crops in `03.LayoutAnalysis/<sample>/regions`, so later stages can still extract richer drawing metadata from title blocks, revision tables, hole tables, tolerance tables, and technical requirements.
 
 The detector classifies each connected long-line component independently. It should not merge every line inside a fixed left, bottom, or top-right window, because nearby dimensions and view outlines can otherwise be swallowed by an oversized removable region. Bottom tables are classified by bottom-edge location, grid strength, width, and area rather than a fixed x-start threshold, because title blocks may start from the left, center, or right side of the sheet.
 
