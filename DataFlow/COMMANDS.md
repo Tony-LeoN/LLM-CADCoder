@@ -265,24 +265,27 @@ DataFlow/02.RawPNG/X350-05-070-A/page_001_600dpi.png
 
 ## 4. `04.CleanPNG -> 05.ViewDetection`
 
-状态：正式自动模块待接入。
+状态：已加入 `ViewCandidateFilter` 后置过滤命令；SketchSegment 检测模型仍作为 raw candidate 来源。
 
 目标：输入 clean page，输出每个 `view_with_annotations` 的 bbox。
 
-计划输入：
+输入：
 
 ```text
 DataFlow/04.CleanPNG/<sample_id>/page_001_clean.png
+DataFlow/05.ViewDetection/<sample_id>/page_001_views.json       # SketchSegment raw detections
 ```
 
-计划输出：
+输出：
 
 ```text
-DataFlow/05.ViewDetection/<sample_id>/page_001_views.json
-DataFlow/05.ViewDetection/<sample_id>/page_001_view_overlay.png
+DataFlow/05.ViewDetection/<sample_id>/page_001_views_raw.json
+DataFlow/05.ViewDetection/<sample_id>/page_001_views.json              # filtered detections
+DataFlow/05.ViewDetection/<sample_id>/page_001_rejected_views.json
+DataFlow/05.ViewDetection/<sample_id>/page_001_view_filter_overlay.png
 ```
 
-计划 JSON 结构：
+过滤后的 JSON 结构：
 
 ```json
 {
@@ -292,21 +295,60 @@ DataFlow/05.ViewDetection/<sample_id>/page_001_view_overlay.png
   "views": [
     {
       "view_id": "view_001",
+      "source_view_id": "view_003",
       "label": "view_with_annotations",
       "bbox": [100, 200, 2500, 1800],
       "score": 0.93,
-      "source": "sketchsegment_view_detector"
+      "source": "sketchsegment_view_detector",
+      "filter": {
+        "accepted": true,
+        "reject_reasons": [],
+        "source": "view_candidate_filter_v1"
+      }
     }
   ]
 }
 ```
 
-推荐接入方案：
+单个样本过滤命令：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli filter-view-detections \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow
+```
+
+如果只想调试，不覆盖原始 `05.ViewDetection/<sample_id>/page_001_views.json`，可以写到临时目录：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli filter-view-detections \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --output-json .tmp/view_filter/M001-08-006-B/page_001_views.json
+```
+
+关键参数：
+
+```text
+--min-score                  默认 0.5；低分候选若具有细线视图特征，仍允许保留
+--top-strip-score            默认 0.6；顶部短条低于该分数时拒绝
+--dense-ink-ratio            默认 0.16；用于拒绝“1套”等粗黑大字块
+--dense-thick-ink-ratio      默认 0.14；用于拒绝粗黑连通文本块
+--no-save-overlay            不保存过滤可视化 overlay
+```
+
+接入方案：
 
 ```text
 SketchSegment ViewBlockDetector
 -> 输出 view_with_annotations bbox
 -> 转写为 DataFlow/05.ViewDetection/<sample_id>/page_001_views.json
+-> LLM-CADCoder ViewCandidateFilter
+-> 输出 filtered views + rejected views
 ```
 
 当前临时替代方案：使用外部裁剪好的 `DataFlow/06.SingleViews/testView2CAD/` crops，跳过 `05.ViewDetection`。

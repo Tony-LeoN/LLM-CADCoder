@@ -105,6 +105,46 @@ def clean_layout_batch(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def filter_view_detections_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.view_filter import ViewFilterConfig, filter_view_detections_file
+
+    dataflow_root = Path(args.dataflow_root)
+    if args.input_json:
+        detection_path = Path(args.input_json)
+        output_path = args.output_json
+    else:
+        if not args.sample_id:
+            raise SystemExit("--sample-id is required when --input-json is not provided")
+        detection_dir = dataflow_root / "05.ViewDetection" / args.sample_id
+        raw_path = detection_dir / f"page_{args.page:03d}_views_raw.json"
+        detection_path = raw_path if raw_path.exists() else detection_dir / f"page_{args.page:03d}_views.json"
+        output_path = args.output_json or detection_dir / f"page_{args.page:03d}_views.json"
+
+    clean_image_path = Path(args.clean_image) if args.clean_image else None
+    layout_path = Path(args.layout_json) if args.layout_json else None
+    result = filter_view_detections_file(
+        detection_path=detection_path,
+        clean_image_path=clean_image_path,
+        layout_path=layout_path,
+        dataflow_root=dataflow_root,
+        output_path=output_path,
+        config=ViewFilterConfig(
+            min_score=args.min_score,
+            top_strip_score=args.top_strip_score,
+            dense_ink_ratio=args.dense_ink_ratio,
+            dense_thick_ink_ratio=args.dense_thick_ink_ratio,
+        ),
+        save_overlay=args.save_overlay,
+    )
+    print(f"Wrote filtered view detections to {result.filtered_path}")
+    print(f"Wrote rejected view report to {result.rejected_path}")
+    if result.raw_path:
+        print(f"Preserved raw detections at {result.raw_path}")
+    if result.overlay_path:
+        print(f"Wrote filter overlay to {result.overlay_path}")
+    print(f"Accepted {len(result.accepted_views)} view(s); rejected {len(result.rejected_views)} candidate(s)")
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -210,6 +250,21 @@ def main() -> None:
     clean_batch_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
     clean_batch_parser.add_argument("--fail-fast", action="store_true")
     clean_batch_parser.set_defaults(func=clean_layout_batch)
+
+    filter_views_parser = subparsers.add_parser("filter-view-detections")
+    filter_views_parser.add_argument("--sample-id")
+    filter_views_parser.add_argument("--page", type=int, default=1)
+    filter_views_parser.add_argument("--dataflow-root", default="DataFlow")
+    filter_views_parser.add_argument("--input-json")
+    filter_views_parser.add_argument("--output-json")
+    filter_views_parser.add_argument("--clean-image")
+    filter_views_parser.add_argument("--layout-json")
+    filter_views_parser.add_argument("--min-score", type=float, default=0.5)
+    filter_views_parser.add_argument("--top-strip-score", type=float, default=0.6)
+    filter_views_parser.add_argument("--dense-ink-ratio", type=float, default=0.16)
+    filter_views_parser.add_argument("--dense-thick-ink-ratio", type=float, default=0.14)
+    filter_views_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
+    filter_views_parser.set_defaults(func=filter_view_detections_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
