@@ -320,6 +320,17 @@ python -m vlm_cadcoder.cli filter-view-detections \
   --dataflow-root DataFlow
 ```
 
+批量过滤命令：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli filter-view-detections-batch \
+  --dataflow-root DataFlow
+```
+
+批量过滤时会严格匹配 `page_<number>_views.json` 和 `page_<number>_views_raw.json`，不会把 `page_001_rejected_views.json` 当作输入。
+
 如果只想调试，不覆盖原始 `05.ViewDetection/<sample_id>/page_001_views.json`，可以写到临时目录：
 
 ```bash

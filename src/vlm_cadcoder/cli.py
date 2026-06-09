@@ -145,6 +145,36 @@ def filter_view_detections_cli(args: argparse.Namespace) -> None:
     print(f"Accepted {len(result.accepted_views)} view(s); rejected {len(result.rejected_views)} candidate(s)")
 
 
+def filter_view_detections_batch_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.view_filter import ViewFilterConfig
+    from vlm_cadcoder.dataflow.view_filter_batch import filter_view_detection_directory
+
+    summary = filter_view_detection_directory(
+        dataflow_root=args.dataflow_root,
+        view_detection_dir=args.view_detection_dir,
+        config=ViewFilterConfig(
+            min_score=args.min_score,
+            top_strip_score=args.top_strip_score,
+            dense_ink_ratio=args.dense_ink_ratio,
+            dense_thick_ink_ratio=args.dense_thick_ink_ratio,
+        ),
+        save_overlay=args.save_overlay,
+        fail_fast=args.fail_fast,
+    )
+    print(f"Filtered {summary.filtered_count} page(s); failed {summary.failed_count}")
+    for record in summary.records:
+        if record.error:
+            print(f"[failed] {record.sample_id} page {record.page:03d}: {record.error}")
+        else:
+            print(
+                f"[filtered] {record.sample_id} page {record.page:03d}: "
+                f"accepted {record.accepted_views}, rejected {record.rejected_candidates}"
+            )
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -265,6 +295,17 @@ def main() -> None:
     filter_views_parser.add_argument("--dense-thick-ink-ratio", type=float, default=0.14)
     filter_views_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
     filter_views_parser.set_defaults(func=filter_view_detections_cli)
+
+    filter_views_batch_parser = subparsers.add_parser("filter-view-detections-batch")
+    filter_views_batch_parser.add_argument("--dataflow-root", default="DataFlow")
+    filter_views_batch_parser.add_argument("--view-detection-dir")
+    filter_views_batch_parser.add_argument("--min-score", type=float, default=0.5)
+    filter_views_batch_parser.add_argument("--top-strip-score", type=float, default=0.6)
+    filter_views_batch_parser.add_argument("--dense-ink-ratio", type=float, default=0.16)
+    filter_views_batch_parser.add_argument("--dense-thick-ink-ratio", type=float, default=0.14)
+    filter_views_batch_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
+    filter_views_batch_parser.add_argument("--fail-fast", action="store_true")
+    filter_views_batch_parser.set_defaults(func=filter_view_detections_batch_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
