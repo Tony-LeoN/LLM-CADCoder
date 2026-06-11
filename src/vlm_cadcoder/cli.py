@@ -201,6 +201,38 @@ def audit_single_views_cli(args: argparse.Namespace) -> None:
             )
 
 
+def classify_views_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.view_classification import classify_view_samples
+
+    summary = classify_view_samples(
+        dataflow_root=args.dataflow_root,
+        sample_id=args.sample_id,
+        page=args.page,
+        include_copy=args.include_copy,
+        fail_fast=args.fail_fast,
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+    )
+    print(
+        f"Classified {summary.classified_count} sample(s); "
+        f"skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote classification summary CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote classification summary JSON to {summary.json_path}")
+    for record in summary.records:
+        if record.skipped:
+            print(f"[skipped] {record.sample_id}: copy sample")
+        elif record.error:
+            print(f"[failed] {record.sample_id}: {record.error}")
+        else:
+            print(f"[classified] {record.sample_id}: {record.classified_views} view(s) -> {record.output_path}")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -339,6 +371,16 @@ def main() -> None:
     audit_single_views_parser.add_argument("--output-csv")
     audit_single_views_parser.add_argument("--output-json")
     audit_single_views_parser.set_defaults(func=audit_single_views_cli)
+
+    classify_views_parser = subparsers.add_parser("classify-views")
+    classify_views_parser.add_argument("--sample-id")
+    classify_views_parser.add_argument("--dataflow-root", default="DataFlow")
+    classify_views_parser.add_argument("--page", type=int, default=1)
+    classify_views_parser.add_argument("--include-copy", action="store_true")
+    classify_views_parser.add_argument("--fail-fast", action="store_true")
+    classify_views_parser.add_argument("--output-csv")
+    classify_views_parser.add_argument("--output-json")
+    classify_views_parser.set_defaults(func=classify_views_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)

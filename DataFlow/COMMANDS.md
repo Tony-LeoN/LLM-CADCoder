@@ -48,6 +48,7 @@ $env:PYTHONPATH="src"
 | `04 -> 05` | 已形成联动流程 | SketchSegment 生成 view candidates，LLM-CADCoder 使用 `ViewCandidateFilter` 后置过滤 |
 | `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
+| `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
@@ -476,7 +477,77 @@ python -m vlm_cadcoder.cli audit-single-views \
 - 常见 `review_reasons` 包括 `view_count_mismatch`、`missing_view_detection`、`missing_single_views`、`copy_sample`、`missing_view_metadata`、`missing_clean_view_image`；
 - `copy`、旧版或未过滤样本会被标记为非正式候选，建议隔离为失败分析或消融样本。
 
-## 6. `06.SingleViews -> benchmark experiments`
+## 6. `06.SingleViews -> 07.ViewClassification`
+
+用途：对 `06.SingleViews` 中的单视图 crop 生成第一版视图类型 baseline。当前实现为启发式规则，不依赖 VLM，只根据 view bbox 面积、宽高比和页面位置判断：
+
+```text
+front
+top
+left
+isometric
+unknown
+```
+
+该结果用于人工复核、后续 VLM 分类对比和 DrawingIR 最小原型，不应视为最终标注真值。
+
+批量分类正式样本，默认跳过 `-copy` 样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli classify-views \
+  --dataflow-root DataFlow
+```
+
+单个样本：
+
+```bash
+python -m vlm_cadcoder.cli classify-views \
+  --sample-id 32HA1252-008-040 \
+  --dataflow-root DataFlow
+```
+
+如果需要同时处理 `-copy` 样本：
+
+```bash
+python -m vlm_cadcoder.cli classify-views \
+  --dataflow-root DataFlow \
+  --include-copy
+```
+
+输出：
+
+```text
+DataFlow/07.ViewClassification/<sample_id>/page_001_view_classification.json
+DataFlow/07.ViewClassification/view_classification_summary.csv
+DataFlow/07.ViewClassification/view_classification_summary.json
+```
+
+单样本 JSON 中每个 view 会包含：
+
+```text
+view_id
+type
+confidence
+is_primary
+needs_manual_review
+reasons
+bbox_on_page
+crop_size
+detector_score
+image_clean
+```
+
+说明：
+
+- `front` 当前由最大非轴测视图启发式确定；
+- `top` 当前主要对应细长水平轮廓视图；
+- `left` 当前主要对应细长竖向或右侧轮廓视图；
+- `isometric` 当前主要对应右下区域的斜视/轴测候选；
+- `needs_manual_review=true` 的结果需要人工复核，尤其是 `left/top/right` 具体投影方向。
+
+## 7. `06.SingleViews -> benchmark experiments`
 
 用途：对 full page、clean page 或 single-view crop 运行小模型筛选任务。
 
@@ -559,7 +630,7 @@ feature_count
 json_stability
 ```
 
-## 7. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
+## 8. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
 
 用途：使用外部 single-view crops、clean 图、VLM benchmark 输出和 STEP 真值，生成最小 DrawingIR、建模计划和 CadQuery prompt。
 
@@ -597,7 +668,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_generation_prompt.m
 
 说明：这是外部 crops 原型闭环，不代表正式 DrawingIR 自动生成已经完成。
 
-## 8. `10.StructuredCADRepresentation -> 11.CADProgram` 规则草稿
+## 9. `10.StructuredCADRepresentation -> 11.CADProgram` 规则草稿
 
 用途：基于 `minimal_drawing_ir.json` 和 `modeling_plan.json` 生成参数复核表和规则化 CadQuery 草稿脚本。
 
@@ -625,7 +696,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_draft.py
 - 参数表中标记为 `needs_review` 的字段不能视为最终图纸约束；
 - 该草稿可用于分析图纸理解结果是否足够支撑建模，而不是最终 CAD 生成方法。
 
-## 9. `10/11 prompt -> 11.CADProgram` LLM 生成 CadQuery
+## 10. `10/11 prompt -> 11.CADProgram` LLM 生成 CadQuery
 
 用途：让服务器上的 VLM/LLM 基于 `cadquery_generation_prompt.md`、clean 图和 single-view crops 直接生成 CadQuery 代码。
 
@@ -655,7 +726,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_llm_generated.py
 - 如果生成脚本出现 API 幻觉，不建议无限修 prompt；
 - 主线仍应回到 DrawingIR、尺寸-几何绑定和约束图。
 
-## 10. CadQuery LLM 输出后处理
+## 11. CadQuery LLM 输出后处理
 
 用途：清理已有 LLM 输出中的 markdown fence、错误 import、导出语句等格式问题。
 
@@ -674,7 +745,7 @@ python -m vlm_cadcoder.cli sanitize-cadquery-llm \
   --output DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_llm_generated.py
 ```
 
-## 11. CadQuery 脚本执行
+## 12. CadQuery 脚本执行
 
 用途：在服务器 CadQuery 环境中执行生成脚本并导出 STEP。
 
@@ -698,7 +769,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/2023-2024-1-923_cadquery_dra
 
 说明：执行成功只代表脚本语法/API 可运行，不代表几何与图纸一致。后续仍需 STEP/渲染/尺寸约束校验模块。
 
-## 12. 建议的一次性运行顺序
+## 13. 建议的一次性运行顺序
 
 以 `X350-05-070-A` 为例，从 PDF 到 clean page：
 
@@ -750,12 +821,11 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
   --dataflow-root DataFlow
 ```
 
-## 13. 后续需要补的命令
+## 14. 后续需要补的命令
 
-当前 `01 -> 06` 已通过 LLM-CADCoder 与 SketchSegment 联动形成流程，`audit-single-views` 已实现。建议下一步补齐以下 CLI：
+当前 `01 -> 07` 已通过 LLM-CADCoder 与 SketchSegment 联动形成流程，`audit-single-views` 和 `classify-views` 已实现。建议下一步补齐以下 CLI：
 
 ```text
-classify-views
 extract-view-features
 build-drawing-ir
 validate-cadquery-step
@@ -764,14 +834,14 @@ validate-cadquery-step
 其中优先级最高的是：
 
 ```text
-classify-views
+extract-view-features
 build-drawing-ir
 ```
 
 这些命令完成后，正式链路就可以从：
 
 ```text
-01 -> 02 -> 03/04 -> 05 -> 06
+01 -> 02 -> 03/04 -> 05 -> 06 -> 07
 ```
 
 稳定推进到：

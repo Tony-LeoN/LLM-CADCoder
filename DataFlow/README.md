@@ -31,7 +31,8 @@ For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
    - `testView2CAD/` may store externally cropped view samples for downstream prototype tests. These samples can be used to bypass `05.ViewDetection` temporarily and test DrawingIR/CadQuery generation, but they must be marked as external crops and should not be used as evidence for automatic view detection performance.
 
 7. `07.ViewClassification`
-   - View labels: front, top, left, section, detail, unknown.
+   - View labels: front, top, left/right side, section, detail, isometric, unknown.
+   - The first implementation is a heuristic baseline from view bbox geometry and page position. It is meant for manual review and VLM comparison, not final ground truth.
 
 8. `08.Multi-viewFeatureExtraction`
    - Feature candidates from each view: holes, slots, counterbores, chamfers, fillets.

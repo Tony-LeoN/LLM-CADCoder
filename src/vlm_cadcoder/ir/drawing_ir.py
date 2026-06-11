@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-ViewType = Literal["front", "top", "left", "right", "bottom", "section", "detail", "unknown"]
+ViewType = Literal["front", "top", "left", "right", "bottom", "section", "detail", "isometric", "unknown"]
 
 
 @dataclass
@@ -45,4 +45,3 @@ class DrawingIR:
     dimensions: list[DimensionIR] = field(default_factory=list)
     feature_candidates: list[FeatureCandidateIR] = field(default_factory=list)
     constraints: list[dict[str, Any]] = field(default_factory=list)
-
