@@ -479,7 +479,7 @@ python -m vlm_cadcoder.cli audit-single-views \
 
 ## 6. `06.SingleViews -> 07.ViewClassification`
 
-用途：对 `06.SingleViews` 中的单视图 crop 生成第一版视图类型 baseline。当前实现为启发式规则，不依赖 VLM，只根据 view bbox 面积、宽高比和页面位置判断：
+用途：对 `06.SingleViews` 中的单视图 crop 生成第一版视图类型 baseline。当前实现为启发式规则，不依赖 VLM，会先用 `05.ViewDetection/<sample_id>/page_001_views.json` 中的 accepted views 过滤 `06` 中的 crop，再根据 view bbox 面积、宽高比和页面位置判断：
 
 ```text
 front
@@ -489,7 +489,7 @@ isometric
 unknown
 ```
 
-该结果用于人工复核、后续 VLM 分类对比和 DrawingIR 最小原型，不应视为最终标注真值。
+该结果用于人工复核、后续 VLM 分类对比和 DrawingIR 最小原型，不应视为最终标注真值。若 `06` 中仍残留 rejected crop，但它没有匹配到 `05` 中的 accepted bbox，会被写入 `skipped_views`，不会进入 `views` 分类结果。
 
 批量分类正式样本，默认跳过 `-copy` 样本：
 
@@ -539,12 +539,19 @@ detector_score
 image_clean
 ```
 
+同时会记录：
+
+```text
+input_filter                  说明 07 使用了 05 accepted views 过滤 06 crops
+skipped_views                 记录 06 中未匹配 05 accepted bbox 的 crop
+```
+
 说明：
 
-- `front` 当前由最大非轴测视图启发式确定；
+- `front` 当前由最大非轴测视图启发式确定，但仍是主视图候选，不是人工真值；
 - `top` 当前主要对应细长水平轮廓视图；
 - `left` 当前主要对应细长竖向或右侧轮廓视图；
-- `isometric` 当前主要对应右下区域的斜视/轴测候选；
+- `isometric` 当前只在存在三个及以上 accepted views 且几何位置符合右下斜视候选时给出；
 - `needs_manual_review=true` 的结果需要人工复核，尤其是 `left/top/right` 具体投影方向。
 
 ## 7. `06.SingleViews -> benchmark experiments`

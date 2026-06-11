@@ -81,10 +81,13 @@ def classify_single_view_sample(
     if not view_items:
         raise ValueError(f"No view_* directories with metadata found in {sample_dir}")
 
-    page_size = _load_page_size(root, sample_id, page, view_items)
-    classifications = _classify_view_items(view_items, page_size)
+    detection_data = _load_detection_data(root, sample_id, page)
+    page_size = _load_page_size(detection_data, view_items)
+    accepted_bboxes = _accepted_detection_bboxes(detection_data)
+    classified_items, skipped_views, input_filter = _filter_items_by_accepted_detections(view_items, accepted_bboxes)
+    classifications = _classify_view_items(classified_items, page_size)
     target = Path(output_path) if output_path else root / "07.ViewClassification" / sample_id / f"page_{page:03d}_view_classification.json"
-    _write_classification_json(target, sample_id, page, page_size, classifications)
+    _write_classification_json(target, sample_id, page, page_size, classifications, input_filter, skipped_views)
     return ViewClassificationResult(sample_id=sample_id, page=page, output_path=target, views=classifications)
 
 
@@ -180,7 +183,7 @@ def _classify_view_items(view_items: list[dict[str, Any]], page_size: tuple[int,
 
 def _classify_one(item: dict[str, Any], front_id: str | None, isometric_ids: set[str]) -> tuple[str, float, list[str]]:
     if item["view_id"] in isometric_ids:
-        return "isometric", 0.62, ["right_lower_oblique_view_candidate"]
+        return "isometric", 0.55, ["right_lower_oblique_view_candidate"]
     if item["view_id"] == front_id:
         return "front", 0.68, ["largest_non_isometric_view"]
 
@@ -237,12 +240,18 @@ def _view_geometry(item: dict[str, Any], page_size: tuple[int, int]) -> dict[str
     return enriched
 
 
-def _load_page_size(root: Path, sample_id: str, page: int, view_items: list[dict[str, Any]]) -> tuple[int, int]:
+def _load_detection_data(root: Path, sample_id: str, page: int) -> dict[str, Any] | None:
     detection_path = root / "05.ViewDetection" / sample_id / f"page_{page:03d}_views.json"
-    if detection_path.exists():
-        with detection_path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        size = data.get("image_size")
+    if not detection_path.exists():
+        return None
+    with detection_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return data if isinstance(data, dict) else None
+
+
+def _load_page_size(detection_data: dict[str, Any] | None, view_items: list[dict[str, Any]]) -> tuple[int, int]:
+    if detection_data:
+        size = detection_data.get("image_size")
         if isinstance(size, dict) and size.get("width") and size.get("height"):
             return int(size["width"]), int(size["height"])
         if isinstance(size, list) and len(size) == 2:
@@ -251,6 +260,85 @@ def _load_page_size(root: Path, sample_id: str, page: int, view_items: list[dict
     max_x = max(item["bbox_on_page"][2] for item in view_items)
     max_y = max(item["bbox_on_page"][3] for item in view_items)
     return max_x, max_y
+
+
+def _accepted_detection_bboxes(detection_data: dict[str, Any] | None) -> list[list[int]] | None:
+    if detection_data is None:
+        return None
+    views = detection_data.get("views")
+    if not isinstance(views, list):
+        return []
+
+    bboxes: list[list[int]] = []
+    for view in views:
+        if not isinstance(view, dict):
+            continue
+        bbox = view.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        filter_data = view.get("filter")
+        if isinstance(filter_data, dict) and filter_data.get("accepted") is False:
+            continue
+        bboxes.append([int(value) for value in bbox])
+    return bboxes
+
+
+def _filter_items_by_accepted_detections(
+    view_items: list[dict[str, Any]],
+    accepted_bboxes: list[list[int]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    if accepted_bboxes is None:
+        return (
+            view_items,
+            [],
+            {
+                "source": "06.SingleViews only",
+                "accepted_detection_count": None,
+                "skipped_view_count": 0,
+            },
+        )
+
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for item in view_items:
+        if _matches_any_bbox(item["bbox_on_page"], accepted_bboxes):
+            kept.append(item)
+        else:
+            skipped.append(
+                {
+                    "view_id": item["view_id"],
+                    "reason": "not_in_05_accepted_views",
+                    "bbox_on_page": item["bbox_on_page"],
+                }
+            )
+
+    return (
+        kept,
+        skipped,
+        {
+            "source": "05.ViewDetection accepted views",
+            "accepted_detection_count": len(accepted_bboxes),
+            "skipped_view_count": len(skipped),
+            "match_rule": "intersection_over_smaller_bbox>=0.85",
+        },
+    )
+
+
+def _matches_any_bbox(bbox: list[int], candidates: list[list[int]]) -> bool:
+    return any(_intersection_over_smaller_bbox(bbox, candidate) >= 0.85 for candidate in candidates)
+
+
+def _intersection_over_smaller_bbox(left: list[int], right: list[int]) -> float:
+    x1 = max(left[0], right[0])
+    y1 = max(left[1], right[1])
+    x2 = min(left[2], right[2])
+    y2 = min(left[3], right[3])
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    intersection = (x2 - x1) * (y2 - y1)
+    left_area = max(1, (left[2] - left[0]) * (left[3] - left[1]))
+    right_area = max(1, (right[2] - right[0]) * (right[3] - right[1]))
+    return intersection / min(left_area, right_area)
 
 
 def _bbox_from_metadata(metadata: dict[str, Any]) -> list[int]:
@@ -291,6 +379,8 @@ def _write_classification_json(
     page: int,
     page_size: tuple[int, int],
     views: list[ViewClassification],
+    input_filter: dict[str, Any],
+    skipped_views: list[dict[str, Any]],
 ) -> None:
     width, height = page_size
     write_json(
@@ -305,6 +395,7 @@ def _write_classification_json(
                 "version": "0.1.0",
                 "role": "baseline_for_manual_review_and_vlm_comparison",
             },
+            "input_filter": input_filter,
             "views": [
                 {
                     "view_id": view.view_id,
@@ -320,6 +411,7 @@ def _write_classification_json(
                 }
                 for view in views
             ],
+            "skipped_views": skipped_views,
         },
     )
 
