@@ -366,18 +366,18 @@ SketchSegment ViewBlockDetector
 
 ## 5. `05.ViewDetection -> 06.SingleViews`
 
-状态：正式自动裁剪模块待接入。
+状态：由 SketchSegment 项目导出脚本生成。
 
 目标：根据 `05.ViewDetection` 的 bbox，从 clean page 裁剪单视图图块。
 
-计划输入：
+输入：
 
 ```text
 DataFlow/04.CleanPNG/<sample_id>/page_001_clean.png
 DataFlow/05.ViewDetection/<sample_id>/page_001_views.json
 ```
 
-计划输出：
+输出：
 
 ```text
 DataFlow/06.SingleViews/<sample_id>/view_001/clean_view_with_annotations.png
@@ -395,6 +395,19 @@ geometry_core.png                   后续生成，尽量只含几何核心
 view_metadata.json                  必须，记录 bbox、score、source、坐标系
 annotations.json                    可选，PMI detector/OCR 输出
 ```
+
+在 SketchSegment 项目中运行：
+
+```bash
+python scripts/09_export_llmcad_views.py \
+  --clean-image LLM-CADCoder/DataFlow/04.CleanPNG/<sample_id>/page_001_clean.png \
+  --views-json LLM-CADCoder/DataFlow/05.ViewDetection/<sample_id>/page_001_views.json \
+  --out-dir LLM-CADCoder/DataFlow/06.SingleViews \
+  --weights runs/view/exp1/weights/best.pt \
+  --sample-id <sample_id>
+```
+
+其中 `--views-json` 建议使用经过 `ViewCandidateFilter` 过滤后的 `page_001_views.json`，这样 `06.SingleViews` 不会继续导出已拒绝的候选框。
 
 当前外部 crops 目录：
 
