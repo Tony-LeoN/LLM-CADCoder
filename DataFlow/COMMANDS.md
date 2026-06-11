@@ -399,12 +399,12 @@ annotations.json                    可选，PMI detector/OCR 输出
 在 SketchSegment 项目中运行：
 
 ```bash
-python scripts/09_export_llmcad_views.py \
-  --clean-image LLM-CADCoder/DataFlow/04.CleanPNG/<sample_id>/page_001_clean.png \
-  --views-json LLM-CADCoder/DataFlow/05.ViewDetection/<sample_id>/page_001_views.json \
-  --out-dir LLM-CADCoder/DataFlow/06.SingleViews \
-  --weights runs/view/exp1/weights/best.pt \
-  --sample-id <sample_id>
+  python scripts/09_export_llmcad_views.py \
+    --clean-image "$img" \
+    --views-json "/home/zxwcax/PycharmProjects/LLMCAD-coder/DataFlow/05.ViewDetection/$sample/page_001_views.json" \
+    --out-dir "/home/zxwcax/PycharmProjects/LLMCAD-coder/DataFlow/06.SingleViews" \
+    --weights runs/detect/runs/view/exp_all/weights/best.pt \
+    --sample-id "$sample"
 ```
 
 其中 `--views-json` 建议使用经过 `ViewCandidateFilter` 过滤后的 `page_001_views.json`，这样 `06.SingleViews` 不会继续导出已拒绝的候选框。
