@@ -93,6 +93,39 @@ def test_bottom_left_technical_requirements_are_extracted_as_text_block() -> Non
     assert technical_regions[0].bbox.y1 < 540
 
 
+def test_inner_frame_vertical_strip_is_removed_near_page_margin() -> None:
+    image = Image.new("RGB", (1000, 700), "white")
+    draw = ImageDraw.Draw(image)
+    draw.line((58, 42, 58, 660), fill="black", width=3)
+    draw.line((942, 42, 942, 660), fill="black", width=3)
+    draw.rectangle((240, 180, 720, 440), outline="black", width=2)
+
+    regions = detect_layout_regions(image)
+    frame_regions = [region for region in regions if region.region_type == "inner_frame_strip"]
+
+    assert len(frame_regions) == 2
+    assert all(region.preserve_as_crop is False for region in frame_regions)
+    assert min(region.bbox.x1 for region in frame_regions) < 60
+    assert max(region.bbox.x2 for region in frame_regions) > 940
+
+
+def test_corner_metadata_box_is_removed_without_grid_density() -> None:
+    image = Image.new("RGB", (1000, 700), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((780, 30, 960, 88), outline="black", width=2)
+    draw.line((840, 30, 840, 88), fill="black", width=2)
+    draw.text((795, 48), "第一角法", fill="black")
+    draw.rectangle((230, 180, 700, 440), outline="black", width=2)
+
+    regions = detect_layout_regions(image)
+    metadata_regions = [region for region in regions if region.region_type == "corner_metadata_box"]
+
+    assert len(metadata_regions) == 1
+    assert metadata_regions[0].preserve_as_crop is True
+    assert metadata_regions[0].bbox.x1 <= 780
+    assert metadata_regions[0].bbox.y2 < 120
+
+
 def _draw_table(
     draw: ImageDraw.ImageDraw,
     box: tuple[int, int, int, int],

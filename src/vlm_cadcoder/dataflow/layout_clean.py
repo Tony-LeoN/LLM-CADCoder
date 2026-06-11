@@ -34,6 +34,19 @@ class LayoutCleanConfig:
     min_grid_intersections: int = 4
     component_gap_px: int = 14
     component_frame_margin_ratio: float = 0.04
+    inner_frame_edge_ratio: float = 0.08
+    inner_frame_min_length_ratio: float = 0.60
+    inner_frame_padding_px: int = 18
+    inner_frame_group_gap_px: int = 8
+    corner_metadata_edge_ratio: float = 0.22
+    corner_metadata_max_y_ratio: float = 0.16
+    corner_metadata_min_width_ratio: float = 0.015
+    corner_metadata_min_height_ratio: float = 0.006
+    corner_metadata_max_width_ratio: float = 0.28
+    corner_metadata_max_height_ratio: float = 0.10
+    corner_metadata_max_area_ratio: float = 0.025
+    corner_metadata_padding_px: int = 14
+    existing_region_overlap_skip_ratio: float = 0.35
     max_revision_height_ratio: float = 0.085
     max_revision_area_ratio: float = 0.025
     max_hole_table_width_ratio: float = 0.56
@@ -146,7 +159,7 @@ def clean_layout_page(
             "coordinate_system": "image_xy_top_left",
             "method": {
                 "name": "rule_based_line_component_layout_cleaner",
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "config": cfg.__dict__,
             },
             "regions": region_dicts,
@@ -182,11 +195,21 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
     neutral_dark = _neutral_dark_mask(rgb, cfg.dark_threshold, cfg.neutral_delta)
     h_segments = _extract_runs(neutral_dark, "h", max(64, int(width * cfg.horizontal_min_ratio)))
     v_segments = _extract_runs(neutral_dark, "v", max(64, int(height * cfg.vertical_min_ratio)))
+    corner_segments = _extract_runs(
+        neutral_dark,
+        "h",
+        max(12, int(width * cfg.corner_metadata_min_width_ratio)),
+    ) + _extract_runs(
+        neutral_dark,
+        "v",
+        max(8, int(height * cfg.corner_metadata_min_height_ratio)),
+    )
 
     regions: list[LayoutRegion] = []
     next_id = _region_id_factory()
     regions.extend(_detect_border_strips(h_segments, v_segments, width, height, cfg, next_id))
     components = _build_line_components(h_segments + v_segments, width, height, cfg)
+    corner_components = _build_line_components(corner_segments, width, height, cfg)
     table_candidates = _detect_table_regions(components, rgb, width, height, cfg)
     table_candidates.extend(_detect_bottom_table_band_regions(h_segments, v_segments, rgb, width, height, cfg))
     for region_type, bbox, confidence, meta in table_candidates:
@@ -202,6 +225,8 @@ def detect_layout_regions(image: Image.Image, config: LayoutCleanConfig | None =
                 metadata=meta,
             )
         )
+    regions.extend(_detect_inner_frame_strips(v_segments, width, height, cfg, next_id))
+    regions.extend(_detect_corner_metadata_boxes(corner_components, width, height, cfg, next_id, regions))
     regions.extend(_detect_technical_requirement_regions(neutral_dark, width, height, cfg, next_id))
     return _deduplicate_regions(regions)
 
@@ -229,6 +254,8 @@ def draw_overlay(image: Image.Image, regions: Iterable[LayoutRegion]) -> Image.I
         "title_or_tolerance_table": (180, 0, 255),
         "revision_table": (0, 160, 255),
         "technical_requirements": (0, 170, 80),
+        "inner_frame_strip": (255, 64, 64),
+        "corner_metadata_box": (0, 120, 220),
     }
     for region in regions:
         color = colors.get(region.region_type, (0, 200, 0))
@@ -319,6 +346,97 @@ def _border_region(region_id: str, bbox: BBox, metadata: dict[str, str]) -> Layo
         source="edge_long_line_rules",
         metadata=metadata,
     )
+
+
+def _detect_inner_frame_strips(
+    v_segments: list[LineSegment],
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+    next_id,
+) -> list[LayoutRegion]:
+    outer_margin = int(width * cfg.edge_margin_ratio)
+    inner_limit = int(width * cfg.inner_frame_edge_ratio)
+    min_length = int(height * cfg.inner_frame_min_length_ratio)
+    side_segments: dict[str, list[LineSegment]] = {"left": [], "right": []}
+
+    for segment in v_segments:
+        if segment.length < min_length:
+            continue
+        if outer_margin < segment.x1 <= inner_limit:
+            side_segments["left"].append(segment)
+        elif width - inner_limit <= segment.x1 < width - outer_margin:
+            side_segments["right"].append(segment)
+
+    regions: list[LayoutRegion] = []
+    for side, segments in side_segments.items():
+        for group in _group_line_segments_by_position(segments, cfg.inner_frame_group_gap_px):
+            bbox = _segments_bbox(group).pad(cfg.inner_frame_padding_px, width, height)
+            max_length = max(segment.length for segment in group)
+            regions.append(
+                LayoutRegion(
+                    region_id=next_id(),
+                    region_type="inner_frame_strip",
+                    bbox=bbox,
+                    action="remove_from_clean_page",
+                    preserve_as_crop=False,
+                    confidence=0.88,
+                    source="near_edge_vertical_line_rules",
+                    metadata={
+                        "side": side,
+                        "vertical_segments": len(group),
+                        "max_length_ratio": round(max_length / height, 6),
+                    },
+                )
+            )
+    return regions
+
+
+def _detect_corner_metadata_boxes(
+    components: list[LineComponent],
+    width: int,
+    height: int,
+    cfg: LayoutCleanConfig,
+    next_id,
+    existing_regions: list[LayoutRegion],
+) -> list[LayoutRegion]:
+    regions: list[LayoutRegion] = []
+    for component in components:
+        h_segments = component.horizontal_segments
+        v_segments = component.vertical_segments
+        if len(h_segments) < 2 or len(v_segments) < 2:
+            continue
+
+        bbox = component.bbox.clamp(width, height)
+        if not _looks_like_corner_metadata_bbox(bbox, width, height, cfg):
+            continue
+        if _overlaps_existing_preserved_region(bbox, existing_regions, cfg):
+            continue
+
+        intersections = _count_intersections(h_segments, v_segments, cfg.component_gap_px)
+        if intersections < 2:
+            continue
+
+        side = "left" if (bbox.x1 + bbox.x2) / 2 < width / 2 else "right"
+        regions.append(
+            LayoutRegion(
+                region_id=next_id(),
+                region_type="corner_metadata_box",
+                bbox=bbox.pad(cfg.corner_metadata_padding_px, width, height),
+                action="remove_from_clean_page",
+                preserve_as_crop=True,
+                confidence=0.82,
+                source="corner_sparse_box_rules",
+                metadata={
+                    "side": side,
+                    "horizontal_segments": len(h_segments),
+                    "vertical_segments": len(v_segments),
+                    "intersections": intersections,
+                    "bbox_area_ratio": round(bbox.area / (width * height), 6),
+                },
+            )
+        )
+    return regions
 
 
 def _detect_table_regions(
@@ -662,6 +780,60 @@ def _segments_bbox(segments: list[LineSegment]) -> BBox:
 def _looks_like_table_bbox(bbox: BBox, width: int, height: int) -> bool:
     area_ratio = bbox.area / (width * height)
     return bbox.width >= width * 0.08 and bbox.height >= height * 0.015 and area_ratio >= 0.002
+
+
+def _looks_like_corner_metadata_bbox(bbox: BBox, width: int, height: int, cfg: LayoutCleanConfig) -> bool:
+    width_ratio = bbox.width / width
+    height_ratio = bbox.height / height
+    area_ratio = bbox.area / (width * height)
+    near_corner = (
+        bbox.y1 <= height * cfg.corner_metadata_max_y_ratio
+        and (bbox.x1 <= width * cfg.corner_metadata_edge_ratio or bbox.x2 >= width * (1 - cfg.corner_metadata_edge_ratio))
+    )
+    return (
+        near_corner
+        and cfg.corner_metadata_min_width_ratio <= width_ratio <= cfg.corner_metadata_max_width_ratio
+        and cfg.corner_metadata_min_height_ratio <= height_ratio <= cfg.corner_metadata_max_height_ratio
+        and area_ratio <= cfg.corner_metadata_max_area_ratio
+    )
+
+
+def _group_line_segments_by_position(segments: list[LineSegment], max_gap: int) -> list[list[LineSegment]]:
+    if not segments:
+        return []
+    sorted_segments = sorted(segments, key=lambda segment: (segment.x1, segment.y1))
+    groups: list[list[LineSegment]] = [[sorted_segments[0]]]
+    for segment in sorted_segments[1:]:
+        previous = groups[-1][-1]
+        if abs(segment.x1 - previous.x1) <= max_gap:
+            groups[-1].append(segment)
+        else:
+            groups.append([segment])
+    return groups
+
+
+def _overlaps_existing_preserved_region(
+    bbox: BBox,
+    regions: list[LayoutRegion],
+    cfg: LayoutCleanConfig,
+) -> bool:
+    for region in regions:
+        if region.region_type == "page_border":
+            continue
+        coverage = _bbox_intersection_area(bbox, region.bbox) / max(1, bbox.area)
+        if coverage >= cfg.existing_region_overlap_skip_ratio:
+            return True
+    return False
+
+
+def _bbox_intersection_area(left: BBox, right: BBox) -> int:
+    x1 = max(left.x1, right.x1)
+    y1 = max(left.y1, right.y1)
+    x2 = min(left.x2, right.x2)
+    y2 = min(left.y2, right.y2)
+    if x2 <= x1 or y2 <= y1:
+        return 0
+    return (x2 - x1) * (y2 - y1)
 
 
 def _colored_foreground_ratio(rgb, bbox: BBox, dark_threshold: int, neutral_delta: int) -> float:
