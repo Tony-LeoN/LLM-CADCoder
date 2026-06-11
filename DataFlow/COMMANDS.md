@@ -44,9 +44,10 @@ $env:PYTHONPATH="src"
 | --- | --- | --- |
 | `01 -> sample index` | 已实现 | 扫描 PDF/STEP 配对，生成 `data/samples.csv` |
 | `01 -> 02` | 已实现 | 单个或批量 PDF 渲染为 PNG |
-| `02 -> 03/04` | 已实现 | 单图或批量页面级 layout 分析与 clean PNG |
-| `04 -> 05` | 待接入 | 计划接入 SketchSegment `ViewBlockDetector` |
-| `05 -> 06` | 待接入 | 根据视图 bbox 裁剪单视图 |
+| `02 -> 03/04` | 已实现 | 单图或批量页面级 layout 分析与 clean PNG，包含表格、边框、内图框条带和角落元信息框处理 |
+| `04 -> 05` | 已形成联动流程 | SketchSegment 生成 view candidates，LLM-CADCoder 使用 `ViewCandidateFilter` 后置过滤 |
+| `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
+| `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
@@ -167,7 +168,7 @@ DataFlow/01.RawPDFWithSTEP/testView2CAD/A.pdf
 
 ## 3. `02.RawPNG -> 03.LayoutAnalysis + 04.CleanPNG`
 
-用途：对整张 PNG 做页面级 layout 分析，去除外边框、标题栏、孔表、版本表、技术要求等非视图区信息，同时保留被移除区域 crop 供后续语义抽取。
+用途：对整张 PNG 做页面级 layout 分析，去除外边框、内图框条带、角落元信息框、标题栏、孔表、版本表、技术要求等非视图区信息，同时保留有语义价值的被移除区域 crop 供后续语义抽取。
 
 命令：
 
@@ -205,6 +206,7 @@ python -m vlm_cadcoder.cli clean-layout \
 说明：
 
 - 默认会保存 removed-region crops 和 overlay；
+- 当前 layout cleaner 已加入轻量增强，可处理靠近页边的 `inner_frame_strip` 和左上/右上稀疏 `corner_metadata_box`；
 - `04.CleanPNG` 保持原图尺寸，只白掉需要移除的区域，因此后续 bbox 坐标仍可与原图对齐。
 
 批量处理 `02.RawPNG` 下所有已渲染页面：
@@ -265,7 +267,7 @@ DataFlow/02.RawPNG/X350-05-070-A/page_001_600dpi.png
 
 ## 4. `04.CleanPNG -> 05.ViewDetection`
 
-状态：已加入 `ViewCandidateFilter` 后置过滤命令；SketchSegment 检测模型仍作为 raw candidate 来源。
+状态：已形成联动流程。SketchSegment 检测模型作为 raw candidate 来源，LLM-CADCoder 提供 `ViewCandidateFilter` 后置过滤命令。
 
 目标：输入 clean page，输出每个 `view_with_annotations` 的 bbox。
 
@@ -362,11 +364,11 @@ SketchSegment ViewBlockDetector
 -> 输出 filtered views + rejected views
 ```
 
-当前临时替代方案：使用外部裁剪好的 `DataFlow/06.SingleViews/testView2CAD/` crops，跳过 `05.ViewDetection`。
+注意：`05.ViewDetection/<sample_id>/page_001_views.json` 应作为 `06.SingleViews` 的唯一正式来源。旧版、未过滤或 `copy` 样本建议隔离为失败分析/消融样本，不要混入正式评测。
 
 ## 5. `05.ViewDetection -> 06.SingleViews`
 
-状态：由 SketchSegment 项目导出脚本生成。
+状态：由 SketchSegment 项目导出脚本生成，当前项目已形成 `01 -> 06` 第一版数据流闭环。
 
 目标：根据 `05.ViewDetection` 的 bbox，从 clean page 裁剪单视图图块。
 
@@ -417,6 +419,62 @@ DataFlow/06.SingleViews/testView2CAD/<sample_id>/cut-json/*.json
 ```
 
 这些外部 crops 可用于下游原型，但不能作为自动视图检测性能证据。
+
+### 5.1 `05.ViewDetection + 06.SingleViews -> audit`
+
+用途：审计 `05.ViewDetection` 与 `06.SingleViews` 是否一致，生成后续人工验收表的基础版本。
+
+命令：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli audit-single-views \
+  --dataflow-root DataFlow
+```
+
+输出：
+
+```text
+DataFlow/06.SingleViews/audit_single_views.csv
+DataFlow/06.SingleViews/audit_single_views.json
+```
+
+CSV/JSON 中会记录：
+
+```text
+sample_id
+page
+official_candidate
+has_view_detection
+has_single_views
+detected_view_count
+rejected_view_count
+exported_view_count
+metadata_count
+clean_image_count
+is_05_06_consistent
+needs_manual_review
+review_reasons
+view_detection_path
+single_views_dir
+```
+
+如果要指定输出路径：
+
+```bash
+python -m vlm_cadcoder.cli audit-single-views \
+  --dataflow-root DataFlow \
+  --output-csv DataFlow/06.SingleViews/audit_single_views.csv \
+  --output-json DataFlow/06.SingleViews/audit_single_views.json
+```
+
+解释：
+
+- `is_05_06_consistent=true` 表示 `05` 中 accepted views 数量、`06` 中 view 目录数量、metadata 数量和 clean image 数量一致；
+- `needs_manual_review=true` 表示样本需要人工检查；
+- 常见 `review_reasons` 包括 `view_count_mismatch`、`missing_view_detection`、`missing_single_views`、`copy_sample`、`missing_view_metadata`、`missing_clean_view_image`；
+- `copy`、旧版或未过滤样本会被标记为非正式候选，建议隔离为失败分析或消融样本。
 
 ## 6. `06.SingleViews -> benchmark experiments`
 
@@ -694,11 +752,9 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
 
 ## 13. 后续需要补的命令
 
-建议下一步补齐以下 CLI：
+当前 `01 -> 06` 已通过 LLM-CADCoder 与 SketchSegment 联动形成流程，`audit-single-views` 已实现。建议下一步补齐以下 CLI：
 
 ```text
-detect-views
-export-single-views
 classify-views
 extract-view-features
 build-drawing-ir
@@ -708,11 +764,11 @@ validate-cadquery-step
 其中优先级最高的是：
 
 ```text
-detect-views
-export-single-views
+classify-views
+build-drawing-ir
 ```
 
-这两个命令完成后，正式链路就可以从：
+这些命令完成后，正式链路就可以从：
 
 ```text
 01 -> 02 -> 03/04 -> 05 -> 06
@@ -721,5 +777,5 @@ export-single-views
 稳定推进到：
 
 ```text
-06 -> OCR/VLM -> 10 -> 11
+06 -> 07 -> 08 -> 09 -> 10 -> 11
 ```

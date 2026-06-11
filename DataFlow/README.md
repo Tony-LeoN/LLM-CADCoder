@@ -15,7 +15,7 @@ For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
    - Each sample should contain `page_001_600dpi.png` and `page_001_600dpi.meta.json`.
 
 3. `03.LayoutAnalysis`
-   - Page-level layout results: title block, notes, drawing views, border frames.
+   - Page-level layout results: title blocks, notes, removable tables, page borders, inner frame strips, and corner metadata boxes.
 
 4. `04.CleanPNG`
    - Cleaned page or view images after denoising, binarization, or annotation removal.
@@ -70,6 +70,7 @@ RawPNG full page
 -> black long-line extraction
 -> connected line-component grouping
 -> page-frame and table-component classification
+-> near-edge inner-frame and sparse corner-box detection
 -> layout JSON + removed-region crops
 -> full-size clean PNG
 ```
@@ -81,10 +82,14 @@ Current removable region types:
 - `title_or_tolerance_table`: bottom title block and general tolerance tables
 - `revision_table`: top-right revision table
 - `technical_requirements`: bottom-left technical requirement text block
+- `inner_frame_strip`: near-edge inner drawing frame strips that are not part of a drawing view
+- `corner_metadata_box`: sparse left-top or right-top page metadata boxes, such as drawing number, first-angle symbol, projection marker, or default roughness area
 
-The clean image should mainly preserve drawing views and view-related annotations: dimensions, leader callouts, surface roughness callouts, geometric tolerances, and local view notes. Detected tables and page-level technical requirement blocks are removed from the clean page but preserved as typed crops in `03.LayoutAnalysis/<sample>/regions`, so later stages can still extract richer drawing metadata from title blocks, revision tables, hole tables, tolerance tables, and technical requirements.
+The clean image should mainly preserve drawing views and view-related annotations: dimensions, leader callouts, surface roughness callouts, geometric tolerances, and local view notes. Detected tables, corner metadata boxes, and page-level technical requirement blocks are removed from the clean page; regions with useful semantics are preserved as typed crops in `03.LayoutAnalysis/<sample>/regions`, so later stages can still extract richer drawing metadata from title blocks, revision tables, hole tables, tolerance tables, corner metadata, and technical requirements.
 
 The detector classifies each connected long-line component independently. It should not merge every line inside a fixed left, bottom, or top-right window, because nearby dimensions and view outlines can otherwise be swallowed by an oversized removable region. Bottom tables are classified by bottom-edge location, grid strength, width, and area rather than a fixed x-start threshold, because title blocks may start from the left, center, or right side of the sheet.
+
+The current lightweight enhancement does not yet perform full planar ring tracing. It adds targeted rules for two recurring failure modes before view detection: long inner frame strips near the page margin, and sparse corner metadata boxes that do not have enough grid density to be classified as normal tables.
 
 Example command:
 

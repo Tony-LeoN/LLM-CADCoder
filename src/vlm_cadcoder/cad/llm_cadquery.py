@@ -94,8 +94,8 @@ def _normalize_imports(code: str) -> str:
         insert_at = 0
         if cleaned and cleaned[0].startswith("from __future__ import"):
             insert_at = 1
-            while insert_at < len(cleaned) and cleaned[insert_at].strip() == "":
-                insert_at += 1
+            if insert_at < len(cleaned) and cleaned[insert_at].strip() == "":
+                cleaned.pop(insert_at)
         cleaned.insert(insert_at, "import cadquery as cq")
         cleaned.insert(insert_at + 1, "")
     return "\n".join(cleaned)

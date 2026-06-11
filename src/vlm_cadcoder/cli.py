@@ -175,6 +175,32 @@ def filter_view_detections_batch_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def audit_single_views_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.single_view_audit import audit_single_views
+
+    summary = audit_single_views(
+        dataflow_root=args.dataflow_root,
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+        page=args.page,
+    )
+    print(
+        f"Audited {summary.total_count} sample(s); "
+        f"consistent {summary.consistent_count}; needs review {summary.review_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote CSV audit report to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote JSON audit report to {summary.json_path}")
+    for record in summary.records:
+        if record.needs_manual_review:
+            reasons = ", ".join(record.review_reasons)
+            print(
+                f"[review] {record.sample_id}: "
+                f"05={record.detected_view_count}, 06={record.exported_view_count}, reasons={reasons}"
+            )
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -306,6 +332,13 @@ def main() -> None:
     filter_views_batch_parser.add_argument("--save-overlay", action=argparse.BooleanOptionalAction, default=True)
     filter_views_batch_parser.add_argument("--fail-fast", action="store_true")
     filter_views_batch_parser.set_defaults(func=filter_view_detections_batch_cli)
+
+    audit_single_views_parser = subparsers.add_parser("audit-single-views")
+    audit_single_views_parser.add_argument("--dataflow-root", default="DataFlow")
+    audit_single_views_parser.add_argument("--page", type=int, default=1)
+    audit_single_views_parser.add_argument("--output-csv")
+    audit_single_views_parser.add_argument("--output-json")
+    audit_single_views_parser.set_defaults(func=audit_single_views_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
