@@ -42,6 +42,7 @@ For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
 
 10. `10.StructuredCADRepresentation`
    - DrawingIR, ConstraintGraph, and ModelingIR JSON artifacts.
+   - For the formal detected-view pipeline, `<sample>/drawing_ir.json` is generated from `05.ViewDetection`, `06.SingleViews`, and `07.ViewClassification`. Version `0.1.0` is a view-level skeleton with provenance and empty placeholders for dimensions, feature candidates, constraints, and view relations.
    - For the external-crop prototype, `testView2CAD/<sample>/external_crop_manifest.json`, `minimal_drawing_ir.json`, and `modeling_plan.json` are generated from external crops, clean images, VLM benchmark outputs, and paired STEP files.
 
 11. `11.CADProgram`

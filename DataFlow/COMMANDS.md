@@ -50,6 +50,7 @@ $env:PYTHONPATH="src"
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
+| `07 -> 10` | 已实现骨架 | 从 05/06/07 生成正式 DrawingIR v0.1 视图级骨架 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
 | `10/11 prompt -> 11 LLM code` | 已实现原型 | VLM/LLM 直接生成 CadQuery 代码 |
@@ -558,7 +559,7 @@ skipped_views                 记录 06 中未匹配 05 accepted bbox 的 crop
 
 用途：对 full page、clean page 或 single-view crop 运行小模型筛选任务。
 
-### 6.1 单图任务
+### 7.1 单图任务
 
 `view_count` 示例：
 
@@ -598,7 +599,7 @@ experiments/<output_root>/<timestamp>_<model>_<task>/metrics.json
 experiments/<output_root>/<timestamp>_<model>_<task>/config.json
 ```
 
-### 6.2 split 批量任务
+### 7.2 split 批量任务
 
 如果已有 split 文件，例如：
 
@@ -637,7 +638,62 @@ feature_count
 json_stability
 ```
 
-## 8. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
+## 8. `07.ViewClassification -> 10.StructuredCADRepresentation`
+
+用途：读取 `05.ViewDetection` accepted views、`06.SingleViews` crop metadata/image 和 `07.ViewClassification` 视图类型候选，生成正式链路的 DrawingIR v0.1。
+
+该阶段只构建视图级骨架，不做尺寸 OCR、特征识别、尺寸-几何绑定或 CAD 参数推理。`front/top/left/isometric/unknown` 当前仍是启发式候选，必须保留 `type_confidence` 和 `needs_manual_review`。
+
+批量生成正式样本，默认跳过 `-copy` 样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --dataflow-root DataFlow
+```
+
+单个样本：
+
+```bash
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow
+```
+
+如果希望遇到坏 JSON 或缺失输入立即停止：
+
+```bash
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --dataflow-root DataFlow \
+  --fail-fast
+```
+
+输出：
+
+```text
+DataFlow/10.StructuredCADRepresentation/<sample_id>/drawing_ir.json
+DataFlow/10.StructuredCADRepresentation/drawing_ir_summary.csv
+DataFlow/10.StructuredCADRepresentation/drawing_ir_summary.json
+```
+
+`drawing_ir.json` 主要包含：
+
+```text
+sheet                     图纸页级信息和 05/06/07 来源路径
+views                     视图 bbox、crop、分类候选、置信度、人工复核标记
+dimensions                当前为空，后续由 08/维度 OCR 填充
+feature_candidates        当前为空，后续由 08/特征识别填充
+constraints               当前为空，后续由 09/约束图构建填充
+view_relations            当前为空，后续记录多视图投影/对应关系
+skipped_views             07 中未进入正式 views 的 rejected/unmatched crops
+provenance                构建器、分类器、过滤器等追溯信息
+quality                   是否需要人工复核、是否可进入特征抽取、CAD 生成阻塞项
+```
+
+注意：该命令会严格解析 `07.ViewClassification/<sample_id>/page_001_view_classification.json`。如果 JSON 文件后面残留多余内容，会报 `Trailing data after JSON document`，需要先重新运行对应样本的 `classify-views`。
+
+## 9. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
 
 用途：使用外部 single-view crops、clean 图、VLM benchmark 输出和 STEP 真值，生成最小 DrawingIR、建模计划和 CadQuery prompt。
 
@@ -675,7 +731,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_generation_prompt.m
 
 说明：这是外部 crops 原型闭环，不代表正式 DrawingIR 自动生成已经完成。
 
-## 9. `10.StructuredCADRepresentation -> 11.CADProgram` 规则草稿
+## 10. `10.StructuredCADRepresentation -> 11.CADProgram` 规则草稿
 
 用途：基于 `minimal_drawing_ir.json` 和 `modeling_plan.json` 生成参数复核表和规则化 CadQuery 草稿脚本。
 
@@ -703,7 +759,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_draft.py
 - 参数表中标记为 `needs_review` 的字段不能视为最终图纸约束；
 - 该草稿可用于分析图纸理解结果是否足够支撑建模，而不是最终 CAD 生成方法。
 
-## 10. `10/11 prompt -> 11.CADProgram` LLM 生成 CadQuery
+## 11. `10/11 prompt -> 11.CADProgram` LLM 生成 CadQuery
 
 用途：让服务器上的 VLM/LLM 基于 `cadquery_generation_prompt.md`、clean 图和 single-view crops 直接生成 CadQuery 代码。
 
@@ -733,7 +789,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_llm_generated.py
 - 如果生成脚本出现 API 幻觉，不建议无限修 prompt；
 - 主线仍应回到 DrawingIR、尺寸-几何绑定和约束图。
 
-## 11. CadQuery LLM 输出后处理
+## 12. CadQuery LLM 输出后处理
 
 用途：清理已有 LLM 输出中的 markdown fence、错误 import、导出语句等格式问题。
 
@@ -752,7 +808,7 @@ python -m vlm_cadcoder.cli sanitize-cadquery-llm \
   --output DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/cadquery_llm_generated.py
 ```
 
-## 12. CadQuery 脚本执行
+## 13. CadQuery 脚本执行
 
 用途：在服务器 CadQuery 环境中执行生成脚本并导出 STEP。
 
@@ -776,7 +832,7 @@ DataFlow/11.CADProgram/testView2CAD/2023-2024-1-923/2023-2024-1-923_cadquery_dra
 
 说明：执行成功只代表脚本语法/API 可运行，不代表几何与图纸一致。后续仍需 STEP/渲染/尺寸约束校验模块。
 
-## 13. 建议的一次性运行顺序
+## 14. 建议的一次性运行顺序
 
 以 `X350-05-070-A` 为例，从 PDF 到 clean page：
 
@@ -828,13 +884,12 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
   --dataflow-root DataFlow
 ```
 
-## 14. 后续需要补的命令
+## 15. 后续需要补的命令
 
-当前 `01 -> 07` 已通过 LLM-CADCoder 与 SketchSegment 联动形成流程，`audit-single-views` 和 `classify-views` 已实现。建议下一步补齐以下 CLI：
+当前 `01 -> 10` 的视图级 DrawingIR 骨架已通过 LLM-CADCoder 与 SketchSegment 联动形成流程。建议后续补齐以下 CLI：
 
 ```text
 extract-view-features
-build-drawing-ir
 validate-cadquery-step
 ```
 
@@ -842,7 +897,6 @@ validate-cadquery-step
 
 ```text
 extract-view-features
-build-drawing-ir
 ```
 
 这些命令完成后，正式链路就可以从：
