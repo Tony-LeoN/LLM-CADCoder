@@ -23,3 +23,9 @@ build/
 .vscode/
 *.log
 /参考文献/*.pdf
+
+# DataFlow generated artifacts
+DataFlow/*
+!DataFlow/COMMANDS.md
+!DataFlow/README.md
+experiments/*
