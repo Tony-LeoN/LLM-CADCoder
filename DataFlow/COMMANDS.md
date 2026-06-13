@@ -48,6 +48,7 @@ $env:PYTHONPATH="src"
 | `04 -> 05` | 已形成联动流程 | SketchSegment 生成 view candidates，LLM-CADCoder 使用 `ViewCandidateFilter` 后置过滤 |
 | `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
+| `06 -> geometry_core` | 已实现调用器 | 调用外部 SketchPic2ViewPic U-Net，把标注视图净化为几何核心图 |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
 | `07 -> 10` | 已实现骨架 | 从 05/06/07 生成正式 DrawingIR v0.1 视图级骨架 |
@@ -395,7 +396,7 @@ DataFlow/06.SingleViews/<sample_id>/view_002/view_metadata.json
 ```text
 raw_view_with_annotations.png       可选，从 raw page 裁剪
 clean_view_with_annotations.png     必须，从 clean page 裁剪
-geometry_core.png                   后续生成，尽量只含几何核心
+geometry_core.png                   由 SketchPic2ViewPic U-Net 生成，尽量只含几何核心
 view_metadata.json                  必须，记录 bbox、score、source、坐标系
 annotations.json                    可选，PMI detector/OCR 输出
 ```
@@ -477,6 +478,123 @@ python -m vlm_cadcoder.cli audit-single-views \
 - `needs_manual_review=true` 表示样本需要人工检查；
 - 常见 `review_reasons` 包括 `view_count_mismatch`、`missing_view_detection`、`missing_single_views`、`copy_sample`、`missing_view_metadata`、`missing_clean_view_image`；
 - `copy`、旧版或未过滤样本会被标记为非正式候选，建议隔离为失败分析或消融样本。
+
+### 5.2 `06.SingleViews -> geometry_core.png`
+
+状态：已接入外部调用器。该阶段使用独立项目 `SketchPic2ViewPic` 中当前选定的 U-Net 模型，将每个 `clean_view_with_annotations.png` 净化为尽量只包含几何轮廓的 `geometry_core.png`。
+
+外部项目不复制到 LLM-CADCoder。本项目只负责扫描 `06.SingleViews`、调用外部推理命令、回填统一命名的结果文件。
+
+当前采用的外部配置：
+
+```text
+SketchPic2ViewPic/configs/unet_baseline.yaml
+run_name: unet_tversky_a07_b03
+checkpoint: runs/unet_tversky_a07_b03/checkpoints/best.pt
+```
+
+输入：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/clean_view_with_annotations.png
+```
+
+输出：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_mask.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_prob.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core.meta.json
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_unet/*.png
+```
+
+建议先确认外部项目环境：
+
+```bash
+cd /home/zxwcax/PycharmProjects/SketchPic2ViewPic
+conda activate sketchpic2viewpic
+python -m pip install -e .
+
+python -m sketchpic2viewpic infer \
+  --config configs/unet_baseline.yaml \
+  --checkpoint runs/unet_tversky_a07_b03/checkpoints/best.pt \
+  --input /home/zxwcax/PycharmProjects/LLMCAD-coder/DataFlow/06.SingleViews/M001-08-006-B/view_001/clean_view_with_annotations.png \
+  --output /home/zxwcax/PycharmProjects/LLMCAD-coder/DataFlow/06.SingleViews/M001-08-006-B/view_001/geometry_core_unet
+```
+
+上面的外部命令会生成：
+
+```text
+geometry_core_unet/clean_view_with_annotations_clean.png
+geometry_core_unet/clean_view_with_annotations_mask.png
+geometry_core_unet/clean_view_with_annotations_prob.png
+```
+
+正式推荐使用 LLM-CADCoder wrapper 自动回填文件名。
+
+先 dry-run 检查将要执行的外部命令：
+
+```bash
+cd /home/zxwcax/PycharmProjects/LLMCAD-coder
+export PYTHONPATH=src
+export SKETCHPIC2VIEWPIC_ROOT=/home/zxwcax/PycharmProjects/SketchPic2ViewPic
+
+python -m vlm_cadcoder.cli generate-geometry-core-unet \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
+  --dry-run
+```
+
+处理单个样本：
+
+```bash
+python -m vlm_cadcoder.cli generate-geometry-core-unet \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
+  --skip-existing
+```
+
+批量处理所有正式样本：
+
+```bash
+python -m vlm_cadcoder.cli generate-geometry-core-unet \
+  --dataflow-root DataFlow \
+  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
+  --skip-existing
+```
+
+默认推理覆盖参数与 `configs/unet_baseline.yaml` 保持一致，并显式传入：
+
+```text
+inference.resize_max_side=3072
+inference.resize_min_side=1024
+inference.patch_size=768
+inference.stride=576
+inference.threshold=0.85
+```
+
+如果临时调整阈值：
+
+```bash
+python -m vlm_cadcoder.cli generate-geometry-core-unet \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
+  --override inference.threshold=0.9
+```
+
+说明：
+
+- wrapper 默认跳过 `*-copy` 样本和 `testView2CAD` 外部原型目录；
+- 如果 `geometry_core.png` 已存在，加 `--skip-existing` 会跳过该 view；
+- 如果只想看外部命令，不执行推理，加 `--dry-run`；
+- `geometry_core.png` 用于后续特征识别、几何约束识别和视图间对应；`clean_view_with_annotations.png` 仍保留尺寸、PMI、引线等语义信息，不能被覆盖。
 
 ## 6. `06.SingleViews -> 07.ViewClassification`
 

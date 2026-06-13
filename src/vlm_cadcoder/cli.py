@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from vlm_cadcoder.dataflow.artifact_store import ArtifactStore
@@ -265,6 +266,54 @@ def build_drawing_ir_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def generate_geometry_core_unet_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.geometry_core_unet import (
+        DEFAULT_INFERENCE_OVERRIDES,
+        GeometryCoreUnetConfig,
+        generate_geometry_core_images,
+    )
+
+    sketch_root = args.sketchpic2viewpic_root or os.environ.get("SKETCHPIC2VIEWPIC_ROOT") or "../SketchPic2ViewPic"
+    if args.no_default_overrides:
+        overrides = tuple(args.override or [])
+    else:
+        overrides = tuple(DEFAULT_INFERENCE_OVERRIDES + tuple(args.override or []))
+
+    summary = generate_geometry_core_images(
+        GeometryCoreUnetConfig(
+            dataflow_root=Path(args.dataflow_root),
+            sketchpic2viewpic_root=Path(sketch_root),
+            python_executable=args.python,
+            config_path=Path(args.config),
+            checkpoint_path=Path(args.checkpoint),
+            sample_id=args.sample_id,
+            output_subdir=args.output_subdir,
+            include_copy=args.include_copy,
+            skip_existing=args.skip_existing,
+            dry_run=args.dry_run,
+            fail_fast=args.fail_fast,
+            overrides=overrides,
+        )
+    )
+    print(
+        "Geometry-core U-Net: "
+        f"total {summary.total_count}; generated {summary.generated_count}; "
+        f"dry-run {summary.dry_run_count}; skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    for record in summary.records:
+        if record.status == "failed":
+            print(f"[failed] {record.sample_id}/{record.view_id}: {record.error}")
+        elif record.status == "dry_run":
+            print(f"[dry-run] {record.sample_id}/{record.view_id}: {' '.join(record.command)}")
+        elif record.status == "skipped":
+            print(f"[skipped] {record.sample_id}/{record.view_id}: existing geometry_core.png")
+        else:
+            print(f"[generated] {record.sample_id}/{record.view_id}: {record.geometry_core_path}")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -423,6 +472,22 @@ def main() -> None:
     drawing_ir_parser.add_argument("--output-csv")
     drawing_ir_parser.add_argument("--output-json")
     drawing_ir_parser.set_defaults(func=build_drawing_ir_cli)
+
+    geometry_core_parser = subparsers.add_parser("generate-geometry-core-unet")
+    geometry_core_parser.add_argument("--dataflow-root", default="DataFlow")
+    geometry_core_parser.add_argument("--sample-id")
+    geometry_core_parser.add_argument("--sketchpic2viewpic-root")
+    geometry_core_parser.add_argument("--python", default="python")
+    geometry_core_parser.add_argument("--config", default="configs/unet_baseline.yaml")
+    geometry_core_parser.add_argument("--checkpoint", default="runs/unet_tversky_a07_b03/checkpoints/best.pt")
+    geometry_core_parser.add_argument("--output-subdir", default="geometry_core_unet")
+    geometry_core_parser.add_argument("--override", action="append")
+    geometry_core_parser.add_argument("--no-default-overrides", action="store_true")
+    geometry_core_parser.add_argument("--include-copy", action="store_true")
+    geometry_core_parser.add_argument("--skip-existing", action="store_true")
+    geometry_core_parser.add_argument("--dry-run", action="store_true")
+    geometry_core_parser.add_argument("--fail-fast", action="store_true")
+    geometry_core_parser.set_defaults(func=generate_geometry_core_unet_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
