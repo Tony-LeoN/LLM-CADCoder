@@ -53,6 +53,7 @@ $env:PYTHONPATH="src"
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
 | `07 + geometry_core audit -> 10` | 已实现初版 | 从 05/06/07 生成 DrawingIR，并把 A 类 geometry_core 转为低层几何候选 |
+| `10 -> 08` | 已实现初版 | 把 `geometry_component` 低层候选提升为保守语义特征候选，供人工复核和后续约束绑定 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
 | `10/11 prompt -> 11 LLM code` | 已实现原型 | VLM/LLM 直接生成 CadQuery 代码 |
@@ -1002,6 +1003,70 @@ quality                   是否需要人工复核、是否可进入特征抽取
 
 注意：该命令会严格解析 `07.ViewClassification/<sample_id>/page_001_view_classification.json`。如果 JSON 文件后面残留多余内容，会报 `Trailing data after JSON document`，需要先重新运行对应样本的 `classify-views`。
 
+### 8.1 `10.StructuredCADRepresentation -> 08.Multi-viewFeatureExtraction`
+
+用途：读取 `DataFlow/10.StructuredCADRepresentation/<sample_id>/drawing_ir.json` 中的低层 `geometry_component` 候选，生成 `08.Multi-viewFeatureExtraction` 阶段的保守语义特征候选。
+
+该阶段当前是规则化 MVP，不调用 VLM，也不把结果当作最终 CAD 特征真值。它只根据 component bbox、面积、长宽比、视图 crop 尺寸和 `geometry_core` 质量信息，给出：
+
+```text
+outer_profile_candidate
+hole_candidate
+slot_candidate
+annotation_residue_candidate
+unknown_geometry_candidate
+```
+
+这些结果主要用于人工复核、后续尺寸-几何绑定、约束图构建和失败分析。进入论文或实验指标时，应把它定义为 `semantic feature candidate extraction`，而不是最终 `CAD feature recognition`。
+
+批量处理所有已有 DrawingIR 样本，默认跳过 `-copy` 样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli extract-view-features \
+  --dataflow-root DataFlow
+```
+
+单个样本：
+
+```bash
+python -m vlm_cadcoder.cli extract-view-features \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow
+```
+
+遇到坏 JSON 或缺失输入立即停止：
+
+```bash
+python -m vlm_cadcoder.cli extract-view-features \
+  --dataflow-root DataFlow \
+  --fail-fast
+```
+
+输出：
+
+```text
+DataFlow/08.Multi-viewFeatureExtraction/<sample_id>/view_features.json
+DataFlow/08.Multi-viewFeatureExtraction/view_feature_summary.csv
+DataFlow/08.Multi-viewFeatureExtraction/view_feature_summary.json
+```
+
+`view_features.json` 主要包含：
+
+```text
+views                     按 view_id 分组的语义候选、视图类型、bbox、crop_size 和 geometry_core 质量块
+feature_candidates        扁平化语义候选列表，保留 source_candidate_id、bbox、bbox_on_page、metrics、evidence
+skipped_components        DrawingIR 中无法匹配到正式 view 的低层 component
+quality                   候选数量、跳过数量、是否需要人工复核和后续阻塞项
+```
+
+注意：
+
+- 当前所有语义候选都带有 `needs_manual_review=true`；
+- `hole_candidate`、`slot_candidate` 等名称只表示“候选”，不能直接用于 CAD 建模参数；
+- 如果输出大量 `annotation_residue_candidate` 或 `unknown_geometry_candidate`，优先回查 `geometry_core.png` 质量和 `geometry_core_audit.json` 的 A/B/C 分层。
+
 ## 9. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
 
 用途：使用外部 single-view crops、clean 图、VLM benchmark 输出和 STEP 真值，生成最小 DrawingIR、建模计划和 CadQuery prompt。
@@ -1195,17 +1260,16 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
 
 ## 15. 后续需要补的命令
 
-当前 `01 -> 10` 的视图级 DrawingIR 骨架已通过 LLM-CADCoder 与 SketchSegment 联动形成流程。建议后续补齐以下 CLI：
+当前 `01 -> 10 -> 08` 的视图级 DrawingIR 与语义候选骨架已通过 LLM-CADCoder 与 SketchSegment 联动形成流程。建议后续补齐以下 CLI：
 
 ```text
-extract-view-features
 validate-cadquery-step
 ```
 
 其中优先级最高的是：
 
 ```text
-extract-view-features
+validate-cadquery-step
 ```
 
 这些命令完成后，正式链路就可以从：

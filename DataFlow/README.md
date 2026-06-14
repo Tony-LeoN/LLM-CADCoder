@@ -39,7 +39,9 @@ For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
    - The first implementation is a heuristic baseline from view bbox geometry and page position. It first filters `06.SingleViews` crops by accepted bboxes in `05.ViewDetection`, records unmatched crops as `skipped_views`, and is meant for manual review and VLM comparison, not final ground truth.
 
 8. `08.Multi-viewFeatureExtraction`
-   - Feature candidates from each view: holes, slots, counterbores, chamfers, fillets.
+   - Formal output: `<sample>/view_features.json` plus batch summary CSV/JSON.
+   - The current MVP reads `10.StructuredCADRepresentation/<sample>/drawing_ir.json` and promotes low-level `geometry_component` bboxes into conservative semantic candidates such as `outer_profile_candidate`, `hole_candidate`, `slot_candidate`, `annotation_residue_candidate`, and `unknown_geometry_candidate`.
+   - These are reviewable candidates, not final CAD feature truth. Every candidate keeps its source component id, bbox, page bbox, metrics, evidence, and `needs_manual_review=true`.
 
 9. `09.Cross-viewGeometricReasoning`
    - Cross-view correspondences and candidate modeling base plane.
@@ -47,7 +49,7 @@ For stage-by-stage processing commands, see [`COMMANDS.md`](COMMANDS.md).
 10. `10.StructuredCADRepresentation`
    - DrawingIR, ConstraintGraph, and ModelingIR JSON artifacts.
    - For the formal detected-view pipeline, `<sample>/drawing_ir.json` is generated from `05.ViewDetection`, `06.SingleViews`, `07.ViewClassification`, and `06.SingleViews/geometry_core_audit.json`.
-   - Version `0.1.0` contains view-level provenance, per-view `geometry_core` quality gates, and conservative low-level `geometry_component` candidates from A-tier geometry-core images. Dimensions, semantic CAD features, constraints, and view relations remain downstream tasks.
+   - Version `0.1.0` contains view-level provenance, per-view `geometry_core` quality gates, and conservative low-level `geometry_component` candidates from A-tier geometry-core images. Dimensions, validated CAD features, constraints, and view relations remain downstream tasks.
    - For the external-crop prototype, `testView2CAD/<sample>/external_crop_manifest.json`, `minimal_drawing_ir.json`, and `modeling_plan.json` are generated from external crops, clean images, VLM benchmark outputs, and paired STEP files.
 
 11. `11.CADProgram`

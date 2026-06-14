@@ -242,6 +242,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 - 实现 `audit-geometry-core`，可结合 `07.ViewClassification` 对正式非轴测视图的 `geometry_core` 进行机器初筛和 A/B/C 质量分层，并通过 `geometry_core_audit_overrides.json` 记录人工排除与质量覆盖，作为后续特征抽取的质量门控；
 - 实现 `audit-single-views` 和 `classify-views`，可对 `05/06` 一致性进行审计，并生成 `07.ViewClassification` 的启发式视图类型 baseline；
 - 实现 `build-drawing-ir`，可从 `05.ViewDetection`、`06.SingleViews`、`07.ViewClassification` 和 `geometry_core_audit.json` 生成正式链路的 DrawingIR v0.1，并对 A 类 `geometry_core.png` 抽取低层 `geometry_component` 候选；
+- 实现 `extract-view-features`，可读取 DrawingIR v0.1 中的 `geometry_component`，生成 `08.Multi-viewFeatureExtraction/<sample_id>/view_features.json`，把低层连通域保守提升为 `outer_profile_candidate`、`hole_candidate`、`slot_candidate`、`annotation_residue_candidate` 和 `unknown_geometry_candidate` 等待复核语义候选；
 - 已在 `DataFlow/LayoutSamples/`、`DataFlow/03.LayoutAnalysis/`、`DataFlow/04.CleanPNG/`、`DataFlow/05.ViewDetection/` 和 `DataFlow/06.SingleViews/` 上进行若干样例验证，当前清理与裁剪策略以“保留视图及其相关标注、去除表格/边框/页面元信息”为目标。
 
 已完成的 benchmark 工程骨架：
@@ -260,7 +261,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 
 ```text
 第二阶段：图纸理解和中间表示抽取
-当前子阶段：geometry_core 质量门控、DrawingIR v0.1 构建与低层几何候选抽取
+当前子阶段：geometry_core 质量门控、DrawingIR v0.1 构建、低层几何候选抽取与 08 语义候选生成
 ```
 
 当前阶段的核心目标是：
@@ -269,6 +270,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 - 建立稳定的页面级 layout cleaning 流程，降低整张 A4/A3 图纸中边框、标题栏和表格对 VLM 的干扰；
 - 建立自动 `05.ViewDetection` 与 `06.SingleViews` 视图裁剪流程，并对其进行人工验收和定量评估；
 - 为每个正式 view 生成 `geometry_core.png`，让后续特征识别同时拥有“带标注视图”和“干净几何视图”两种输入；
+- 基于 DrawingIR 中的低层 `geometry_component` 生成第一版可复核语义特征候选，为尺寸-几何绑定和约束图构建提供特征侧输入；
 - 允许使用外部方法切好的 `DataFlow/06.SingleViews/testView2CAD/` crops 作为临时原型输入，提前验证后续 DrawingIR、特征抽取和 CadQuery 代码生成流程；
 - 形成可复现的小模型筛选 benchmark；
 - 比较 InternVL、Qwen-VL、PaddleOCR-VL 等候选模型在工程图纸理解任务上的表现；
@@ -278,7 +280,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 当前尚未进入：
 
 - 大规模模型训练或微调；
-- 完整 DrawingIR 自动生成，当前已完成视图级骨架和低层几何候选，尚未完成尺寸、语义特征和约束图；
+- 完整 DrawingIR 自动生成，当前已完成视图级骨架、低层几何候选和保守语义候选，尚未完成尺寸、最终语义特征验证和约束图；
 - 尺寸-几何绑定算法定型；
 - ConstraintGraph 自动构建；
 - 正式的 CadQuery 脚本生成模块；
@@ -298,7 +300,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 5. 在服务器上批量运行 `generate-geometry-core-unet`，检查 `geometry_core.png` 是否稳定保留几何轮廓并去除尺寸/PMI 干扰；
 6. 使用 `audit-geometry-core` 生成质量审计表和 contact sheet，对正式非轴测视图中的 B/C 类样本做人工复核，并把人工修正写入 `geometry_core_audit_overrides.json`；
 7. 人工复核 `07.ViewClassification` 中低置信度或 `needs_manual_review=true` 的视图类型，形成第一版主视图/侧视图/俯视图/轴测图标签；
-8. 基于 `drawing_ir.json` 中的 `geometry_component` 候选继续设计 `08.Multi-viewFeatureExtraction`，把低层连通域候选提升为孔、槽、倒角、圆角、阵列和厚度/拉伸方向等可验证语义特征；
+8. 批量运行并审计 `extract-view-features`，检查 `hole_candidate`、`slot_candidate`、`outer_profile_candidate` 等候选是否与人工观察一致，并整理失败类型；
 9. 跑通 `view_count`、`view_classification`、`dimension_ocr`、`feature_count`、`json_stability` 五个小模型筛选任务，并比较 full page、clean page、single-view crop、geometry_core 四种输入；
 10. 基于评测结果确定主 VLM、OCR 工具、layout/view crop/geometry core 工具组合和后续 DrawingIR 扩展方式。
 
@@ -310,7 +312,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 | --- | --- | --- | --- |
 | 阶段 1：课题收敛与数据准备 | 明确博士主线、样本范围和数据流 | README、DataFlow、初始 PDF/STEP 数据 | 已完成第一版，持续补充 |
 | 阶段 2：图纸理解与模型筛选 | 评估小参数 VLM/OCR 模型的图纸理解能力，建立 layout/view crop/geometry core 数据流 | model-screening benchmark、layout cleaning、view crop、geometry core、质量审计、评测报告 | `01 -> 07` 已形成基线，U-Net 净化和质量审计已接入 |
-| 阶段 3：DrawingIR 构建 | 从 page/view crops 抽取视图、尺寸、标注和特征候选 | DrawingIR JSON、标注规范 | v0.1 已接入 geometry_core 质量门控和低层几何候选，下一步补语义特征与尺寸绑定 |
+| 阶段 3：DrawingIR 构建 | 从 page/view crops 抽取视图、尺寸、标注和特征候选 | DrawingIR JSON、标注规范 | v0.1 已接入 geometry_core 质量门控、低层几何候选和 08 语义候选，下一步补尺寸识别、特征验证与尺寸绑定 |
 | 阶段 4：尺寸-几何绑定与约束图 | 建立尺寸标注、几何实体和多视图关系 | ConstraintGraph、绑定算法、F1 指标 | 待完成 |
 | 阶段 5：CadQuery 代码生成 | 将结构化图纸知识转为参数化建模脚本 | CadQuery 代码、STEP 模型 | 可用外部 crops 做临时原型 |
 | 阶段 6：执行反馈与修复 | 根据 CAD 执行、渲染和尺寸误差修复代码 | 修复日志、几何校验报告 | 待完成 |
