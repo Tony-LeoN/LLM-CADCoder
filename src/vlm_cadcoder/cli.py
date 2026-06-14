@@ -202,6 +202,42 @@ def audit_single_views_cli(args: argparse.Namespace) -> None:
             )
 
 
+def audit_geometry_core_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.geometry_core_audit import audit_geometry_core
+
+    summary = audit_geometry_core(
+        dataflow_root=args.dataflow_root,
+        sample_id=args.sample_id,
+        page=args.page,
+        include_copy=args.include_copy,
+        use_view_classification=args.use_view_classification,
+        include_isometric=args.include_isometric,
+        overrides_json=args.overrides_json,
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+        contact_sheet=args.contact_sheet,
+        save_contact_sheet=args.save_contact_sheet,
+        contact_sheet_limit=args.contact_sheet_limit,
+    )
+    tier_counts = summary.tier_counts
+    print(
+        "Audited geometry-core views: "
+        f"total {summary.total_count}; "
+        f"A {tier_counts['A']}; B {tier_counts['B']}; C {tier_counts['C']}; "
+        f"needs review {summary.review_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote geometry-core audit CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote geometry-core audit JSON to {summary.json_path}")
+    if summary.contact_sheet_path:
+        print(f"Wrote geometry-core contact sheet to {summary.contact_sheet_path}")
+    for record in summary.records:
+        if record.needs_manual_review:
+            reasons = ", ".join(record.review_reasons)
+            print(f"[review] {record.sample_id}/{record.view_id}: tier={record.quality_tier}, reasons={reasons}")
+
+
 def classify_views_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.dataflow.view_classification import classify_view_samples
 
@@ -243,6 +279,8 @@ def build_drawing_ir_cli(args: argparse.Namespace) -> None:
         page=args.page,
         include_copy=args.include_copy,
         fail_fast=args.fail_fast,
+        geometry_core_audit_path=args.geometry_core_audit,
+        extract_feature_candidates=args.extract_feature_candidates,
         output_csv=args.output_csv,
         output_json=args.output_json,
     )
@@ -453,6 +491,21 @@ def main() -> None:
     audit_single_views_parser.add_argument("--output-json")
     audit_single_views_parser.set_defaults(func=audit_single_views_cli)
 
+    audit_geometry_core_parser = subparsers.add_parser("audit-geometry-core")
+    audit_geometry_core_parser.add_argument("--dataflow-root", default="DataFlow")
+    audit_geometry_core_parser.add_argument("--sample-id")
+    audit_geometry_core_parser.add_argument("--page", type=int, default=1)
+    audit_geometry_core_parser.add_argument("--include-copy", action="store_true")
+    audit_geometry_core_parser.add_argument("--use-view-classification", action=argparse.BooleanOptionalAction, default=True)
+    audit_geometry_core_parser.add_argument("--include-isometric", action="store_true")
+    audit_geometry_core_parser.add_argument("--overrides-json")
+    audit_geometry_core_parser.add_argument("--output-csv")
+    audit_geometry_core_parser.add_argument("--output-json")
+    audit_geometry_core_parser.add_argument("--contact-sheet")
+    audit_geometry_core_parser.add_argument("--contact-sheet-limit", type=int, default=120)
+    audit_geometry_core_parser.add_argument("--save-contact-sheet", action=argparse.BooleanOptionalAction, default=True)
+    audit_geometry_core_parser.set_defaults(func=audit_geometry_core_cli)
+
     classify_views_parser = subparsers.add_parser("classify-views")
     classify_views_parser.add_argument("--sample-id")
     classify_views_parser.add_argument("--dataflow-root", default="DataFlow")
@@ -469,6 +522,8 @@ def main() -> None:
     drawing_ir_parser.add_argument("--page", type=int, default=1)
     drawing_ir_parser.add_argument("--include-copy", action="store_true")
     drawing_ir_parser.add_argument("--fail-fast", action="store_true")
+    drawing_ir_parser.add_argument("--geometry-core-audit")
+    drawing_ir_parser.add_argument("--extract-feature-candidates", action=argparse.BooleanOptionalAction, default=True)
     drawing_ir_parser.add_argument("--output-csv")
     drawing_ir_parser.add_argument("--output-json")
     drawing_ir_parser.set_defaults(func=build_drawing_ir_cli)

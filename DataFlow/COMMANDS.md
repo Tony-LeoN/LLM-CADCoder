@@ -49,9 +49,10 @@ $env:PYTHONPATH="src"
 | `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> geometry_core` | 已实现调用器 | 调用外部 SketchPic2ViewPic U-Net，把标注视图净化为几何核心图 |
+| `geometry_core -> audit` | 已实现 | 对 geometry core 进行质量分层，输出 CSV/JSON/contact sheet |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
-| `07 -> 10` | 已实现骨架 | 从 05/06/07 生成正式 DrawingIR v0.1 视图级骨架 |
+| `07 + geometry_core audit -> 10` | 已实现初版 | 从 05/06/07 生成 DrawingIR，并把 A 类 geometry_core 转为低层几何候选 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
 | `10/11 prompt -> 11 LLM code` | 已实现原型 | VLM/LLM 直接生成 CadQuery 代码 |
@@ -512,7 +513,7 @@ DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_unet/*.png
 建议先确认外部项目环境：
 
 ```bash
-cd /home/zxwcax/PycharmProjects/SketchPic2ViewPic
+cd /home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic
 conda activate sketchpic2viewpic
 python -m pip install -e .
 
@@ -538,7 +539,7 @@ geometry_core_unet/clean_view_with_annotations_prob.png
 ```bash
 cd /home/zxwcax/PycharmProjects/LLMCAD-coder
 export PYTHONPATH=src
-export SKETCHPIC2VIEWPIC_ROOT=/home/zxwcax/PycharmProjects/SketchPic2ViewPic
+export SKETCHPIC2VIEWPIC_ROOT=/home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic
 
 python -m vlm_cadcoder.cli generate-geometry-core-unet \
   --sample-id M001-08-006-B \
@@ -553,7 +554,7 @@ python -m vlm_cadcoder.cli generate-geometry-core-unet \
 python -m vlm_cadcoder.cli generate-geometry-core-unet \
   --sample-id M001-08-006-B \
   --dataflow-root DataFlow \
-  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --sketchpic2viewpic-root /home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic \
   --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
   --skip-existing
 ```
@@ -563,7 +564,7 @@ python -m vlm_cadcoder.cli generate-geometry-core-unet \
 ```bash
 python -m vlm_cadcoder.cli generate-geometry-core-unet \
   --dataflow-root DataFlow \
-  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --sketchpic2viewpic-root /home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic \
   --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
   --skip-existing
 ```
@@ -584,7 +585,7 @@ inference.threshold=0.85
 python -m vlm_cadcoder.cli generate-geometry-core-unet \
   --sample-id M001-08-006-B \
   --dataflow-root DataFlow \
-  --sketchpic2viewpic-root /home/zxwcax/PycharmProjects/SketchPic2ViewPic \
+  --sketchpic2viewpic-root /home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic \
   --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
   --override inference.threshold=0.9
 ```
@@ -595,6 +596,174 @@ python -m vlm_cadcoder.cli generate-geometry-core-unet \
 - 如果 `geometry_core.png` 已存在，加 `--skip-existing` 会跳过该 view；
 - 如果只想看外部命令，不执行推理，加 `--dry-run`；
 - `geometry_core.png` 用于后续特征识别、几何约束识别和视图间对应；`clean_view_with_annotations.png` 仍保留尺寸、PMI、引线等语义信息，不能被覆盖。
+
+### 5.3 `geometry_core -> quality audit`
+
+用途：对 `06.SingleViews` 中的 `geometry_core.png` 做质量审计，避免把 U-Net 净化失败的视图直接送入后续特征识别和约束图构建。
+
+默认审计范围会结合 `07.ViewClassification`：
+
+```text
+只审计 07/views 中的正式 view
+跳过 07/skipped_views，也就是 05/07 已 reject 的 crop
+默认跳过 type=isometric 的轴测图
+如果样本缺少 07 分类文件，默认不审计该样本
+```
+
+原因：当前 `geometry_core` 主要服务后续特征识别、尺寸-几何绑定和正投影视图约束推理；rejected crop 和 isometric view 暂不进入正式几何质量统计。
+
+审计输入：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/clean_view_with_annotations.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_mask.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_prob.png
+DataFlow/07.ViewClassification/<sample_id>/page_001_view_classification.json
+```
+
+审计输出：
+
+```text
+DataFlow/06.SingleViews/geometry_core_audit.csv
+DataFlow/06.SingleViews/geometry_core_audit.json
+DataFlow/06.SingleViews/geometry_core_audit_contact_sheet.png
+```
+
+可选人工修正输入：
+
+```text
+DataFlow/06.SingleViews/geometry_core_audit_overrides.json
+```
+
+批量审计正式样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow
+```
+
+只审计单个样本：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow
+```
+
+如果要把轴测图也纳入审计：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --include-isometric
+```
+
+如果要绕过 `07.ViewClassification`，直接审计 `06.SingleViews` 中所有 view 目录：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow \
+  --no-use-view-classification
+```
+
+该模式只用于排查或消融，因为它会重新纳入 rejected crop 和 isometric view。
+
+如果不想生成 contact sheet：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow \
+  --no-save-contact-sheet
+```
+
+如果希望限制 contact sheet 中的样本数量：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow \
+  --contact-sheet-limit 80
+```
+
+CSV 中预留人工复核列：
+
+```text
+manual_quality_label
+manual_notes
+```
+
+这些列用于记录当前审计结果中的人工覆盖信息。为了保证审计可复现，不建议直接手改 `geometry_core_audit.csv` 后作为长期依据；建议把人工结论写入：
+
+```text
+DataFlow/06.SingleViews/geometry_core_audit_overrides.json
+```
+
+示例：
+
+```json
+{
+  "schema": "geometry_core_audit_overrides",
+  "version": "0.1.0",
+  "overrides": [
+    {
+      "sample_id": "M001-08-006-B",
+      "view_id": "view_005",
+      "exclude": true,
+      "reason": "manual_excluded_stale_view"
+    },
+    {
+      "sample_id": "X468-02-049-A",
+      "view_id": "view_001",
+      "quality_tier": "C",
+      "reason": "manual_bad_geometry_core"
+    },
+    {
+      "sample_id": "X476-04-002-A",
+      "view_id": "view_001",
+      "quality_tier": "A",
+      "reason": "manual_good_geometry_core"
+    }
+  ]
+}
+```
+
+如需指定其他人工修正文件：
+
+```bash
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow \
+  --overrides-json DataFlow/06.SingleViews/geometry_core_audit_overrides.json
+```
+
+建议人工标签使用：
+
+```text
+A/good       几何轮廓完整，标注基本去除，可作为几何主输入
+B/usable     局部断线、碎片、残留或过度简化，只能作为辅助输入
+C/bad        缺失、误删严重、伪线严重或不可用，应从后续自动特征抽取中排除
+```
+
+当前自动质量分层只作为初筛，不作为最终真值。它主要依据：
+
+```text
+geometry_core 是否存在
+clean 与 geometry_core 尺寸是否一致
+黑像素比例
+geometry/clean 墨迹保留比例
+明显额外墨迹比例
+geometry 连通域碎片数量
+mask/prob 输出是否完整
+```
+
+重要说明：
+
+- `A` 表示机器规则暂未发现明显异常，不等于人工确认的高质量真值；
+- `B/C` 必须优先人工复核；
+- 该审计结果应作为后续 `08.Multi-viewFeatureExtraction` 的输入质量门控和失败分析来源；
+- contact sheet 左侧为 `clean_view_with_annotations.png`，右侧为 `geometry_core.png`，用于快速人工判定。
 
 ## 6. `06.SingleViews -> 07.ViewClassification`
 
@@ -758,9 +927,9 @@ json_stability
 
 ## 8. `07.ViewClassification -> 10.StructuredCADRepresentation`
 
-用途：读取 `05.ViewDetection` accepted views、`06.SingleViews` crop metadata/image 和 `07.ViewClassification` 视图类型候选，生成正式链路的 DrawingIR v0.1。
+用途：读取 `05.ViewDetection` accepted views、`06.SingleViews` crop metadata/image、`07.ViewClassification` 视图类型候选和 `06.SingleViews/geometry_core_audit.json`，生成正式链路的 DrawingIR v0.1。
 
-该阶段只构建视图级骨架，不做尺寸 OCR、特征识别、尺寸-几何绑定或 CAD 参数推理。`front/top/left/isometric/unknown` 当前仍是启发式候选，必须保留 `type_confidence` 和 `needs_manual_review`。
+该阶段已经接入 geometry_core 质量门控：只有 `quality_tier=A` 且 `geometry_core.png` 存在的正式视图会进入低层几何候选抽取；B/C、缺失 audit 记录或缺失图片的视图会进入 `quality.blocking_items`。当前候选仍是 `geometry_component` 级别的连通域 bbox，不等同于孔、槽、倒角、圆角等最终 CAD 语义特征。
 
 批量生成正式样本，默认跳过 `-copy` 样本：
 
@@ -769,6 +938,22 @@ export PYTHONPATH=src
 
 python -m vlm_cadcoder.cli build-drawing-ir \
   --dataflow-root DataFlow
+```
+
+显式指定 geometry_core 审计文件：
+
+```bash
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --dataflow-root DataFlow \
+  --geometry-core-audit DataFlow/06.SingleViews/geometry_core_audit.json
+```
+
+只生成视图级 IR，不抽取低层几何候选：
+
+```bash
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --dataflow-root DataFlow \
+  --no-extract-feature-candidates
 ```
 
 单个样本：
@@ -799,15 +984,21 @@ DataFlow/10.StructuredCADRepresentation/drawing_ir_summary.json
 
 ```text
 sheet                     图纸页级信息和 05/06/07 来源路径
-views                     视图 bbox、crop、分类候选、置信度、人工复核标记
+views                     视图 bbox、crop、分类候选、置信度、人工复核标记、geometry_core 质量块
 dimensions                当前为空，后续由 08/维度 OCR 填充
-feature_candidates        当前为空，后续由 08/特征识别填充
+feature_candidates        A 类 geometry_core 产生的低层 geometry_component bbox，语义仍为 unclassified
 constraints               当前为空，后续由 09/约束图构建填充
 view_relations            当前为空，后续记录多视图投影/对应关系
 skipped_views             07 中未进入正式 views 的 rejected/unmatched crops
 provenance                构建器、分类器、过滤器等追溯信息
 quality                   是否需要人工复核、是否可进入特征抽取、CAD 生成阻塞项
 ```
+
+注意：
+
+- `feature_candidates` 目前只表示干净几何视图中的墨迹连通域候选，用于给 08 阶段提供可复核的低层几何输入；
+- 不应把 `geometry_component` 直接当作孔、槽、沉孔、倒角或圆角；
+- 若 `quality.ready_for_feature_extraction=false`，说明该样本至少有一个正式视图被 geometry_core 质量门控挡住，应先复核 `geometry_core_audit_contact_sheet.png` 或更新 `geometry_core_audit_overrides.json`。
 
 注意：该命令会严格解析 `07.ViewClassification/<sample_id>/page_001_view_classification.json`。如果 JSON 文件后面残留多余内容，会报 `Trailing data after JSON document`，需要先重新运行对应样本的 `classify-views`。
 

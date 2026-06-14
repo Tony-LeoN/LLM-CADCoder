@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
 from vlm_cadcoder.dataflow.drawing_ir_builder import build_drawing_ir_sample, build_drawing_ir_samples
 
@@ -74,14 +75,39 @@ def test_build_drawing_ir_sample_rejects_trailing_json_data(tmp_path: Path) -> N
         build_drawing_ir_sample(sample_id="Part-B", dataflow_root=dataflow)
 
 
-def test_build_drawing_ir_sample_requires_single_view_metadata(tmp_path: Path) -> None:
+def test_build_drawing_ir_sample_records_stale_classification_views_as_skipped(tmp_path: Path) -> None:
     dataflow = tmp_path / "DataFlow"
     bbox = [100, 120, 700, 420]
-    _write_detection(dataflow, "Part-Missing", accepted_bbox=bbox)
-    _write_classification(dataflow, "Part-Missing", accepted_bbox=bbox)
+    _write_detection(dataflow, "Part-Stale", accepted_bbox=bbox)
+    _write_classification(dataflow, "Part-Stale", accepted_bbox=bbox)
 
-    with pytest.raises(FileNotFoundError, match="view_metadata.json"):
-        build_drawing_ir_sample(sample_id="Part-Missing", dataflow_root=dataflow)
+    result = build_drawing_ir_sample(sample_id="Part-Stale", dataflow_root=dataflow)
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    assert result.view_count == 0
+    assert data["skipped_views"] == [
+        {
+            "view_id": "view_001",
+            "reason": "missing_single_view_metadata",
+            "bbox_on_page": bbox,
+            "source": "07.ViewClassification",
+        }
+    ]
+    assert "no_classified_views" in data["quality"]["review_reasons"]
+
+
+def test_build_drawing_ir_sample_tolerates_extra_metadata_closing_brace(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    bbox = [100, 120, 700, 420]
+    _write_detection(dataflow, "Part-Metadata", accepted_bbox=bbox)
+    _write_single_view(dataflow, "Part-Metadata", "view_001", bbox=bbox)
+    _write_classification(dataflow, "Part-Metadata", accepted_bbox=bbox)
+    metadata_path = dataflow / "06.SingleViews" / "Part-Metadata" / "view_001" / "view_metadata.json"
+    metadata_path.write_text(metadata_path.read_text(encoding="utf-8") + "}\n", encoding="utf-8")
+
+    result = build_drawing_ir_sample(sample_id="Part-Metadata", dataflow_root=dataflow)
+
+    assert result.view_count == 1
 
 
 def test_build_drawing_ir_sample_requires_matching_accepted_detection(tmp_path: Path) -> None:
@@ -108,6 +134,61 @@ def test_build_drawing_ir_samples_writes_batch_summary(tmp_path: Path) -> None:
     assert summary.skipped_count == 0
     assert (dataflow / "10.StructuredCADRepresentation" / "drawing_ir_summary.csv").exists()
     assert (dataflow / "10.StructuredCADRepresentation" / "drawing_ir_summary.json").exists()
+
+
+def test_build_drawing_ir_sample_extracts_a_tier_geometry_components(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    bbox = [0, 0, 100, 80]
+    _write_detection(dataflow, "Part-Feature", accepted_bbox=bbox)
+    _write_single_view(dataflow, "Part-Feature", "view_001", bbox=bbox)
+    geometry_path = dataflow / "06.SingleViews" / "Part-Feature" / "view_001" / "geometry_core.png"
+    _write_geometry_core(geometry_path, rectangles=[(10, 10, 30, 20), (55, 35, 72, 52)])
+    _write_geometry_core_audit(dataflow, "Part-Feature", "view_001", tier="A", geometry_path=geometry_path)
+    _write_classification(dataflow, "Part-Feature", accepted_bbox=bbox)
+
+    result = build_drawing_ir_sample(sample_id="Part-Feature", dataflow_root=dataflow)
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    view = data["views"][0]
+    assert view["geometry_core"]["quality_tier"] == "A"
+    assert view["geometry_core"]["ready_for_feature_extraction"] is True
+    assert view["image_geometry_core"] == "DataFlow/06.SingleViews/Part-Feature/view_001/geometry_core.png"
+    assert data["quality"]["ready_for_feature_extraction"] is True
+    assert data["quality"]["feature_extraction_input_view_count"] == 1
+    assert data["quality"]["feature_candidate_count"] == 2
+    assert {candidate["type"] for candidate in data["feature_candidates"]} == {"geometry_component"}
+    assert {candidate["semantic_status"] for candidate in data["feature_candidates"]} == {"unclassified"}
+    assert data["feature_candidates"][0]["view_id"] == "view_001"
+    assert data["feature_candidates"][0]["bbox"]
+
+
+def test_build_drawing_ir_sample_blocks_non_a_geometry_core_from_feature_candidates(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    bbox = [0, 0, 100, 80]
+    _write_detection(dataflow, "Part-Blocked", accepted_bbox=bbox)
+    _write_single_view(dataflow, "Part-Blocked", "view_001", bbox=bbox)
+    geometry_path = dataflow / "06.SingleViews" / "Part-Blocked" / "view_001" / "geometry_core.png"
+    _write_geometry_core(geometry_path, rectangles=[(10, 10, 30, 20)])
+    _write_geometry_core_audit(
+        dataflow,
+        "Part-Blocked",
+        "view_001",
+        tier="C",
+        geometry_path=geometry_path,
+        review_reasons=["manual_bad_geometry_core"],
+    )
+    _write_classification(dataflow, "Part-Blocked", accepted_bbox=bbox)
+
+    result = build_drawing_ir_sample(sample_id="Part-Blocked", dataflow_root=dataflow)
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    view = data["views"][0]
+    assert view["geometry_core"]["quality_tier"] == "C"
+    assert view["geometry_core"]["ready_for_feature_extraction"] is False
+    assert data["feature_candidates"] == []
+    assert data["quality"]["ready_for_feature_extraction"] is False
+    assert data["quality"]["geometry_core_blocked_view_count"] == 1
+    assert "geometry_core_not_ready" in data["quality"]["review_reasons"]
 
 
 def _write_detection(
@@ -226,3 +307,50 @@ def _write_classification(
         else [],
     }
     (target / "page_001_view_classification.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_geometry_core(path: Path, *, rectangles: list[tuple[int, int, int, int]]) -> None:
+    image = Image.new("L", (100, 80), 255)
+    draw = ImageDraw.Draw(image)
+    for rectangle in rectangles:
+        draw.rectangle(rectangle, fill=0)
+    image.save(path)
+
+
+def _write_geometry_core_audit(
+    dataflow: Path,
+    sample_id: str,
+    view_id: str,
+    *,
+    tier: str,
+    geometry_path: Path,
+    review_reasons: list[str] | None = None,
+) -> None:
+    target = dataflow / "06.SingleViews" / "geometry_core_audit.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    relative_geometry_path = Path("DataFlow") / geometry_path.relative_to(dataflow)
+    payload = {
+        "schema": "geometry_core_audit",
+        "version": "0.1.0",
+        "summary": {"total_count": 1, "tier_counts": {tier: 1}, "review_count": 0},
+        "records": [
+            {
+                "sample_id": sample_id,
+                "view_id": view_id,
+                "view_type": "front",
+                "quality_tier": tier,
+                "needs_manual_review": tier != "A",
+                "review_reasons": review_reasons or [],
+                "geometry_component_count": len(review_reasons or []) + 1,
+                "geometry_core_path": relative_geometry_path.as_posix(),
+                "mask_path": None,
+                "probability_path": None,
+                "paths": {
+                    "geometry_core": relative_geometry_path.as_posix(),
+                    "geometry_core_mask": None,
+                    "geometry_core_prob": None,
+                },
+            }
+        ],
+    }
+    target.write_text(json.dumps(payload), encoding="utf-8")

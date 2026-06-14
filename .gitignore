@@ -28,4 +28,7 @@ build/
 DataFlow/*
 !DataFlow/COMMANDS.md
 !DataFlow/README.md
+!DataFlow/06.SingleViews/
+DataFlow/06.SingleViews/*
+!DataFlow/06.SingleViews/geometry_core_audit_overrides.json
 experiments/*
