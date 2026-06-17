@@ -50,6 +50,7 @@ $env:PYTHONPATH="src"
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> geometry_core` | 已实现调用器 | 调用外部 SketchPic2ViewPic U-Net，把标注视图净化为几何核心图 |
 | `geometry_core -> repair` | 已实现 MVP | 对 U-Net 几何核心图做轻量水平/竖直断线桥接和小碎片过滤 |
+| `geometry_core -> primitive repair` | 已实现 MVP | 保守生成 line/circle_arc 基元修复候选，拒绝孤立闭合矩形框 |
 | `geometry_core -> audit` | 已实现 | 对 geometry core 进行质量分层，输出 CSV/JSON/contact sheet |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
@@ -661,7 +662,67 @@ python -m vlm_cadcoder.cli repair-geometry-core \
 - 该 MVP 只做保守的水平/竖直小间隙修复，斜线、圆弧和基于概率图的弱线证据可作为下一阶段增强；
 - `--skip-existing` 只有在 repaired、overlay 和 metadata 都存在时才跳过，避免保留半成品输出。
 
-### 5.4 `geometry_core -> quality audit`
+### 5.4 `geometry_core -> primitive repair candidates`
+
+用途：对 `geometry_core.png` 生成保守几何基元修复候选。该阶段只把用于 gap bridging 的 `line` 与 `circle_arc` 写入 accepted candidates；孤立闭合矩形框会写入 rejected candidates，避免把标注框、局部视图框或文字框误保留为 CAD 几何。
+
+输入：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core.png
+```
+
+输出：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_primitive_repaired.png
+DataFlow/06.SingleViews/<sample_id>/view_001/primitive_repair_overlay.png
+DataFlow/06.SingleViews/<sample_id>/view_001/primitive_candidates.json
+DataFlow/06.SingleViews/geometry_primitive_repair_summary.csv
+DataFlow/06.SingleViews/geometry_primitive_repair_summary.json
+```
+
+单个样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli repair-geometry-primitives \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --skip-existing
+```
+
+批量处理正式样本：
+
+```bash
+python -m vlm_cadcoder.cli repair-geometry-primitives \
+  --dataflow-root DataFlow \
+  --skip-existing
+```
+
+常用参数：
+
+```text
+--primitive-type                 可重复传入 line/circle_arc；不传时默认只启用 circle_arc
+--max-line-gap-px                允许桥接的水平/竖直直线最大断口，默认 12
+--min-line-segment-px            直线 gap 两侧最短线段长度，默认 16
+--min-existing-arc-coverage      接受圆弧候选所需的最小现有弧线覆盖率，默认 0.55
+--min-circle-gap-ratio           接受圆弧候选所需的最小缺口比例，默认 0.05
+--max-circle-gap-ratio           接受圆弧候选允许的最大缺口比例，默认 0.35
+--circle-radius-tolerance        圆弧拟合平均径向误差阈值，默认 0.18
+--dry-run                        只扫描并生成汇总，不写 view 级输出
+```
+
+说明：
+
+- 该命令是 candidate artifact，不自动替换 DrawingIR 或 CAD 生成输入；
+- overlay 中黑色为原始墨迹，红色为基元候选新增修复像素；
+- `primitive_candidates.json` 同时记录 accepted 和 rejected candidates，后续可用于人工复核、消融和规则迭代；
+- 直线候选与上一层 `repair-geometry-core` 有重叠，默认关闭；如需消融可显式传入 `--primitive-type line --primitive-type circle_arc`；
+- 矩形框默认只拒绝不补全，后续若要处理真实矩形外轮廓，需要结合 view 拓扑、文本区域和尺寸绑定证据再开放。
+
+### 5.5 `geometry_core -> quality audit`
 
 用途：对 `06.SingleViews` 中的 `geometry_core.png` 做质量审计，避免把 U-Net 净化失败的视图直接送入后续特征识别和约束图构建。
 

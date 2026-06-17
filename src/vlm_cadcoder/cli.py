@@ -440,6 +440,67 @@ def repair_geometry_core_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def repair_geometry_primitives_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.geometry_primitive_repair import GeometryPrimitiveRepairConfig, repair_geometry_primitives
+
+    primitive_types = tuple(args.primitive_type or [])
+    if not primitive_types:
+        primitive_types = ("circle_arc",)
+
+    summary = repair_geometry_primitives(
+        GeometryPrimitiveRepairConfig(
+            dataflow_root=Path(args.dataflow_root),
+            sample_id=args.sample_id,
+            input_name=args.input_name,
+            output_name=args.output_name,
+            overlay_name=args.overlay_name,
+            candidates_name=args.candidates_name,
+            include_copy=args.include_copy,
+            skip_existing=args.skip_existing,
+            dry_run=args.dry_run,
+            fail_fast=args.fail_fast,
+            black_threshold=args.black_threshold,
+            min_component_area_px=args.min_component_area_px,
+            max_line_gap_px=args.max_line_gap_px,
+            min_line_segment_px=args.min_line_segment_px,
+            min_existing_arc_coverage=args.min_existing_arc_coverage,
+            min_circle_gap_ratio=args.min_circle_gap_ratio,
+            max_circle_gap_ratio=args.max_circle_gap_ratio,
+            circle_radius_tolerance=args.circle_radius_tolerance,
+            min_circle_radius_px=args.min_circle_radius_px,
+            rectangle_fill_ratio_max=args.rectangle_fill_ratio_max,
+            rectangle_edge_coverage_min=args.rectangle_edge_coverage_min,
+            primitive_types=primitive_types,
+        ),
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+    )
+    print(
+        "Geometry primitive repair: "
+        f"total {summary.total_count}; repaired {summary.repaired_count}; "
+        f"dry-run {summary.dry_run_count}; skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote geometry primitive repair CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote geometry primitive repair JSON to {summary.json_path}")
+    for record in summary.records:
+        if record.status == "failed":
+            print(f"[failed] {record.sample_id}/{record.view_id}: {record.error}")
+        elif record.status == "dry_run":
+            print(f"[dry-run] {record.sample_id}/{record.view_id}: {record.input_path} -> {record.repaired_path}")
+        elif record.status == "skipped":
+            print(f"[skipped] {record.sample_id}/{record.view_id}: existing primitive repair outputs")
+        else:
+            print(
+                f"[repaired] {record.sample_id}/{record.view_id}: "
+                f"accepted {record.accepted_count}, rejected {record.rejected_count} -> {record.repaired_path}"
+            )
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -664,6 +725,33 @@ def main() -> None:
     repair_geometry_parser.add_argument("--output-csv")
     repair_geometry_parser.add_argument("--output-json")
     repair_geometry_parser.set_defaults(func=repair_geometry_core_cli)
+
+    primitive_repair_parser = subparsers.add_parser("repair-geometry-primitives")
+    primitive_repair_parser.add_argument("--dataflow-root", default="DataFlow")
+    primitive_repair_parser.add_argument("--sample-id")
+    primitive_repair_parser.add_argument("--input-name", default="geometry_core.png")
+    primitive_repair_parser.add_argument("--output-name", default="geometry_core_primitive_repaired.png")
+    primitive_repair_parser.add_argument("--overlay-name", default="primitive_repair_overlay.png")
+    primitive_repair_parser.add_argument("--candidates-name", default="primitive_candidates.json")
+    primitive_repair_parser.add_argument("--include-copy", action="store_true")
+    primitive_repair_parser.add_argument("--skip-existing", action="store_true")
+    primitive_repair_parser.add_argument("--dry-run", action="store_true")
+    primitive_repair_parser.add_argument("--fail-fast", action="store_true")
+    primitive_repair_parser.add_argument("--black-threshold", type=int, default=250)
+    primitive_repair_parser.add_argument("--min-component-area-px", type=int, default=24)
+    primitive_repair_parser.add_argument("--max-line-gap-px", type=int, default=12)
+    primitive_repair_parser.add_argument("--min-line-segment-px", type=int, default=16)
+    primitive_repair_parser.add_argument("--min-existing-arc-coverage", type=float, default=0.55)
+    primitive_repair_parser.add_argument("--min-circle-gap-ratio", type=float, default=0.05)
+    primitive_repair_parser.add_argument("--max-circle-gap-ratio", type=float, default=0.35)
+    primitive_repair_parser.add_argument("--circle-radius-tolerance", type=float, default=0.18)
+    primitive_repair_parser.add_argument("--min-circle-radius-px", type=int, default=8)
+    primitive_repair_parser.add_argument("--rectangle-fill-ratio-max", type=float, default=0.45)
+    primitive_repair_parser.add_argument("--rectangle-edge-coverage-min", type=float, default=0.45)
+    primitive_repair_parser.add_argument("--primitive-type", action="append", choices=["line", "circle_arc"])
+    primitive_repair_parser.add_argument("--output-csv")
+    primitive_repair_parser.add_argument("--output-json")
+    primitive_repair_parser.set_defaults(func=repair_geometry_primitives_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)
