@@ -383,6 +383,63 @@ def generate_geometry_core_unet_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def repair_geometry_core_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.geometry_core_repair import GeometryCoreRepairConfig, repair_geometry_core_images
+
+    directions = tuple(args.direction or [])
+    if not directions:
+        directions = ("horizontal", "vertical")
+
+    summary = repair_geometry_core_images(
+        GeometryCoreRepairConfig(
+            dataflow_root=Path(args.dataflow_root),
+            sample_id=args.sample_id,
+            input_name=args.input_name,
+            clean_input_name=args.clean_input_name,
+            probability_input_name=args.probability_input_name,
+            output_name=args.output_name,
+            overlay_name=args.overlay_name,
+            metadata_name=args.metadata_name,
+            include_copy=args.include_copy,
+            skip_existing=args.skip_existing,
+            dry_run=args.dry_run,
+            fail_fast=args.fail_fast,
+            black_threshold=args.black_threshold,
+            max_gap_px=args.max_gap_px,
+            min_segment_px=args.min_segment_px,
+            bridge_support_radius=args.bridge_support_radius,
+            min_bridge_support=args.min_bridge_support,
+            tiny_area_px=args.tiny_area_px,
+            directions=directions,
+        ),
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+    )
+    print(
+        "Geometry-core repair: "
+        f"total {summary.total_count}; repaired {summary.repaired_count}; "
+        f"dry-run {summary.dry_run_count}; skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote geometry-core repair CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote geometry-core repair JSON to {summary.json_path}")
+    for record in summary.records:
+        if record.status == "failed":
+            print(f"[failed] {record.sample_id}/{record.view_id}: {record.error}")
+        elif record.status == "dry_run":
+            print(f"[dry-run] {record.sample_id}/{record.view_id}: {record.input_path} -> {record.repaired_path}")
+        elif record.status == "skipped":
+            print(f"[skipped] {record.sample_id}/{record.view_id}: existing {record.repaired_path.name}")
+        else:
+            added = (record.metrics or {}).get("added_pixel_count", 0)
+            removed = (record.metrics or {}).get("removed_pixel_count", 0)
+            print(f"[repaired] {record.sample_id}/{record.view_id}: added {added}, removed {removed} -> {record.repaired_path}")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def build_view2cad_prototype_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.cad.view2cad_prototype import View2CADPrototypeConfig, build_view2cad_prototype
 
@@ -583,6 +640,30 @@ def main() -> None:
     geometry_core_parser.add_argument("--dry-run", action="store_true")
     geometry_core_parser.add_argument("--fail-fast", action="store_true")
     geometry_core_parser.set_defaults(func=generate_geometry_core_unet_cli)
+
+    repair_geometry_parser = subparsers.add_parser("repair-geometry-core")
+    repair_geometry_parser.add_argument("--dataflow-root", default="DataFlow")
+    repair_geometry_parser.add_argument("--sample-id")
+    repair_geometry_parser.add_argument("--input-name", default="geometry_core.png")
+    repair_geometry_parser.add_argument("--clean-input-name", default="clean_view_with_annotations.png")
+    repair_geometry_parser.add_argument("--probability-input-name", default="geometry_core_prob.png")
+    repair_geometry_parser.add_argument("--output-name", default="geometry_core_repaired.png")
+    repair_geometry_parser.add_argument("--overlay-name", default="geometry_core_repair_overlay.png")
+    repair_geometry_parser.add_argument("--metadata-name", default="geometry_core_repair.meta.json")
+    repair_geometry_parser.add_argument("--include-copy", action="store_true")
+    repair_geometry_parser.add_argument("--skip-existing", action="store_true")
+    repair_geometry_parser.add_argument("--dry-run", action="store_true")
+    repair_geometry_parser.add_argument("--fail-fast", action="store_true")
+    repair_geometry_parser.add_argument("--black-threshold", type=int, default=250)
+    repair_geometry_parser.add_argument("--max-gap-px", type=int, default=12)
+    repair_geometry_parser.add_argument("--min-segment-px", type=int, default=16)
+    repair_geometry_parser.add_argument("--bridge-support-radius", type=int, default=1)
+    repair_geometry_parser.add_argument("--min-bridge-support", type=int, default=2)
+    repair_geometry_parser.add_argument("--tiny-area-px", type=int, default=12)
+    repair_geometry_parser.add_argument("--direction", action="append", choices=["horizontal", "vertical"])
+    repair_geometry_parser.add_argument("--output-csv")
+    repair_geometry_parser.add_argument("--output-json")
+    repair_geometry_parser.set_defaults(func=repair_geometry_core_cli)
 
     view2cad_parser = subparsers.add_parser("build-view2cad-prototype")
     view2cad_parser.add_argument("--sample-id", required=True)

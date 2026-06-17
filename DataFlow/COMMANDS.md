@@ -49,6 +49,7 @@ $env:PYTHONPATH="src"
 | `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> geometry_core` | 已实现调用器 | 调用外部 SketchPic2ViewPic U-Net，把标注视图净化为几何核心图 |
+| `geometry_core -> repair` | 已实现 MVP | 对 U-Net 几何核心图做轻量水平/竖直断线桥接和小碎片过滤 |
 | `geometry_core -> audit` | 已实现 | 对 geometry core 进行质量分层，输出 CSV/JSON/contact sheet |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
@@ -598,7 +599,69 @@ python -m vlm_cadcoder.cli generate-geometry-core-unet \
 - 如果只想看外部命令，不执行推理，加 `--dry-run`；
 - `geometry_core.png` 用于后续特征识别、几何约束识别和视图间对应；`clean_view_with_annotations.png` 仍保留尺寸、PMI、引线等语义信息，不能被覆盖。
 
-### 5.3 `geometry_core -> quality audit`
+### 5.3 `geometry_core -> repair`
+
+用途：对 `geometry_core.png` 做轻量拓扑修复，优先处理 U-Net 去标注后出现的水平/竖直小断线，并移除极小碎片。该命令不会覆盖原始 `geometry_core.png`，而是输出独立的 repaired 版本，便于后续做消融对比。
+
+输入：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core.png
+DataFlow/06.SingleViews/<sample_id>/view_001/clean_view_with_annotations.png  # 可选，仅记录证据链
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_prob.png           # 可选，仅记录证据链
+```
+
+输出：
+
+```text
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_repaired.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_repair_overlay.png
+DataFlow/06.SingleViews/<sample_id>/view_001/geometry_core_repair.meta.json
+DataFlow/06.SingleViews/geometry_core_repair_summary.csv
+DataFlow/06.SingleViews/geometry_core_repair_summary.json
+```
+
+单个样本：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli repair-geometry-core \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --skip-existing
+```
+
+批量处理正式样本：
+
+```bash
+python -m vlm_cadcoder.cli repair-geometry-core \
+  --dataflow-root DataFlow \
+  --skip-existing
+```
+
+常用参数：
+
+```text
+--max-gap-px          允许桥接的最大断线间隙，默认 12
+--min-segment-px      gap 两侧最短线段长度，默认 16
+--bridge-support-radius  搜索相邻扫描线支持的半径，默认 1
+--min-bridge-support  至少需要多少条相邻扫描线支持同一 gap，默认 2
+--tiny-area-px        小于该像素面积的连通域会被移除，默认 12
+--direction           可重复传入 horizontal/vertical；不传时两者都启用
+--dry-run             只扫描并生成汇总，不写 repaired/overlay/meta
+--fail-fast           任一 view 失败后立即停止
+```
+
+说明：
+
+- repaired 图当前是后处理候选，不自动替换 DrawingIR 中的 `geometry_core.png` 输入；
+- overlay 中黑色为原始保留墨迹，红色为新增桥接像素，灰色为被移除碎片；
+- 默认桥接要求相邻扫描线也存在相近 gap，单行/单列孤证不会桥接；若要做更激进的消融，可把 `--min-bridge-support` 调为 1；
+- 该 MVP 只做保守的水平/竖直小间隙修复，斜线、圆弧和基于概率图的弱线证据可作为下一阶段增强；
+- `--skip-existing` 只有在 repaired、overlay 和 metadata 都存在时才跳过，避免保留半成品输出。
+
+### 5.4 `geometry_core -> quality audit`
 
 用途：对 `06.SingleViews` 中的 `geometry_core.png` 做质量审计，避免把 U-Net 净化失败的视图直接送入后续特征识别和约束图构建。
 
