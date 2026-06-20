@@ -49,13 +49,14 @@ $env:PYTHONPATH="src"
 | `05 -> 06` | 已形成联动流程 | 由 SketchSegment 导出脚本根据过滤后的 view bbox 裁剪单视图 |
 | `05/06 -> audit` | 已实现 | 审计 view detection 与 single-view crops 是否一致 |
 | `06 -> geometry_core` | 已实现调用器 | 调用外部 SketchPic2ViewPic U-Net，把标注视图净化为几何核心图 |
-| `geometry_core -> repair` | 已实现 MVP | 对 U-Net 几何核心图做轻量水平/竖直断线桥接和小碎片过滤 |
-| `geometry_core -> primitive repair` | 已实现 MVP | 保守生成 line/circle_arc 基元修复候选，拒绝孤立闭合矩形框 |
+| `geometry_core -> repair` | 已实现 MVP | 对 U-Net 几何核心图做轻量水平/竖直断线桥接和小碎片过滤；作为 sidecar 输出，不覆盖原图 |
+| `geometry_core -> primitive repair` | 已实现 MVP | 保守生成 circle_arc 基元修复候选，line 需显式开启；拒绝孤立闭合矩形框 |
 | `geometry_core -> audit` | 已实现 | 对 geometry core 进行质量分层，输出 CSV/JSON/contact sheet |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
 | `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
 | `07 + geometry_core audit -> 10` | 已实现初版 | 从 05/06/07 生成 DrawingIR，并把 A 类 geometry_core 转为低层几何候选 |
 | `10 -> 08` | 已实现初版 | 把 `geometry_component` 低层候选提升为保守语义特征候选，供人工复核和后续约束绑定 |
+| `10 + dimension_ocr -> 08` | 已实现 MVP | 读取 DrawingIR 和 VLM/OCR `dimension_ocr` 预测，生成可复核尺寸候选 |
 | `06 + experiments -> 10/11 prompt` | 已实现原型 | 外部 crops 原型闭环 |
 | `10 -> 11 draft` | 已实现原型 | 规则化 CadQuery 草稿 |
 | `10/11 prompt -> 11 LLM code` | 已实现原型 | VLM/LLM 直接生成 CadQuery 代码 |
@@ -1191,6 +1192,79 @@ quality                   候选数量、跳过数量、是否需要人工复核
 - `hole_candidate`、`slot_candidate` 等名称只表示“候选”，不能直接用于 CAD 建模参数；
 - 如果输出大量 `annotation_residue_candidate` 或 `unknown_geometry_candidate`，优先回查 `geometry_core.png` 质量和 `geometry_core_audit.json` 的 A/B/C 分层。
 
+### 8.2 `10.StructuredCADRepresentation + dimension_ocr -> 08.DimensionCandidates`
+
+用途：读取正式链路的 `drawing_ir.json` 和一个或多个 VLM/OCR `dimension_ocr` 预测文件，将尺寸文本归一化为可复核尺寸候选。该阶段只做候选抽取、基础类型推断、数量/数值/公差解析和 view 归属，不做尺寸-几何绑定。
+
+输入：
+
+```text
+DataFlow/10.StructuredCADRepresentation/<sample_id>/drawing_ir.json
+experiments/**/predictions.jsonl   # task=dimension_ocr
+```
+
+输出：
+
+```text
+DataFlow/08.Multi-viewFeatureExtraction/<sample_id>/dimension_candidates.json
+DataFlow/08.Multi-viewFeatureExtraction/dimension_extraction_summary.csv
+DataFlow/08.Multi-viewFeatureExtraction/dimension_extraction_summary.json
+```
+
+先用 VLM/OCR 跑单视图尺寸识别，例如：
+
+```bash
+python -m vlm_cadcoder.benchmarks.model_screening.runner \
+  --model qwen2_5_vl_3b \
+  --task dimension_ocr \
+  --image DataFlow/06.SingleViews/M001-08-006-B/view_001/clean_view_with_annotations.png \
+  --output-root experiments/dimension_ocr
+```
+
+再把 `predictions.jsonl` 汇总为尺寸候选：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli extract-dimensions \
+  --sample-id M001-08-006-B \
+  --dataflow-root DataFlow \
+  --prediction-jsonl experiments/dimension_ocr/<run_dir>/predictions.jsonl
+```
+
+批量处理多个 DrawingIR 样本：
+
+```bash
+python -m vlm_cadcoder.cli extract-dimensions \
+  --dataflow-root DataFlow \
+  --prediction-jsonl experiments/dimension_ocr/<run_dir>/predictions.jsonl
+```
+
+可以重复传入多个预测文件：
+
+```bash
+python -m vlm_cadcoder.cli extract-dimensions \
+  --dataflow-root DataFlow \
+  --prediction-jsonl experiments/dimension_ocr/run_a/predictions.jsonl \
+  --prediction-jsonl experiments/dimension_ocr/run_b/predictions.jsonl
+```
+
+`dimension_candidates.json` 主要包含：
+
+```text
+views                     按 view_id 分组的尺寸候选
+dimension_candidates      扁平化尺寸候选，包含 text、normalized、dimension_type、bbox、bbox_on_page、value、quantity、tolerance、source
+unmatched_records         无法匹配到 DrawingIR view 的 dimension_ocr 记录
+quality                   候选数量、未匹配记录数量和后续阻塞项
+```
+
+说明：
+
+- 当前 `bbox` 只有在 OCR/VLM 输出中提供时才会保留；没有 bbox 的尺寸候选仍会进入结果，但会带有 `missing_dimension_bbox` 复核原因；
+- `dimension_type` 会对 `Φ/Ø/⌀`、`R`、`M`、`C`、角度和粗糙度做基础规则归一化；
+- `value` 只表示文本中的主数值，例如 `4 x Φ 4.5` 会解析为 `quantity=4, value=4.5`；
+- 输出仍是候选层，`ready_for_dimension_geometry_binding=false`。正式参数必须等下一步 `bind-dimensions-to-geometry` 完成。
+
 ## 9. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
 
 用途：使用外部 single-view crops、clean 图、VLM benchmark 输出和 STEP 真值，生成最小 DrawingIR、建模计划和 CadQuery prompt。
@@ -1355,6 +1429,44 @@ python -m vlm_cadcoder.cli clean-layout \
   --dataflow-root DataFlow
 ```
 
+正式样本从 `06.SingleViews` 到 `08.Multi-viewFeatureExtraction` 的当前推荐顺序：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli classify-views \
+  --dataflow-root DataFlow
+
+python -m vlm_cadcoder.cli generate-geometry-core-unet \
+  --dataflow-root DataFlow \
+  --sketchpic2viewpic-root /home/zxwcax/Projects/SketchPic2View/SketchPic2ViewPic \
+  --python /home/zxwcax/anaconda3/envs/sketchpic2viewpic/bin/python \
+  --skip-existing
+
+python -m vlm_cadcoder.cli repair-geometry-core \
+  --dataflow-root DataFlow \
+  --skip-existing
+
+python -m vlm_cadcoder.cli repair-geometry-primitives \
+  --dataflow-root DataFlow \
+  --skip-existing
+
+python -m vlm_cadcoder.cli audit-geometry-core \
+  --dataflow-root DataFlow
+
+python -m vlm_cadcoder.cli build-drawing-ir \
+  --dataflow-root DataFlow
+
+python -m vlm_cadcoder.cli extract-view-features \
+  --dataflow-root DataFlow
+```
+
+说明：
+
+- `repair-geometry-core` 和 `repair-geometry-primitives` 当前都是辅助产物，不会自动替换 DrawingIR 的输入；
+- 如果要做直线基元修复消融，在 `repair-geometry-primitives` 中显式加入 `--primitive-type line --primitive-type circle_arc`；
+- 如果 `audit-geometry-core` 输出 B/C 或人工认为不可靠，应先更新 `geometry_core_audit_overrides.json`，再重新运行 `build-drawing-ir` 和 `extract-view-features`。
+
 以 `2023-2024-1-923` 为例，从外部 crops 到 CadQuery 原型：
 
 ```bash
@@ -1384,17 +1496,23 @@ python -m vlm_cadcoder.cli build-cadquery-draft \
 
 ## 15. 后续需要补的命令
 
-当前 `01 -> 10 -> 08` 的视图级 DrawingIR 与语义候选骨架已通过 LLM-CADCoder 与 SketchSegment 联动形成流程。建议后续补齐以下 CLI：
+当前 `01 -> 10 -> 08` 的视图级 DrawingIR 与语义候选骨架已通过 LLM-CADCoder、SketchSegment 和 SketchPic2ViewPic 联动形成流程。下一步主线应从“几何候选”推进到“尺寸-几何绑定”和“可校验 CAD 生成”。建议后续补齐以下 CLI：
 
 ```text
+extract-dimensions
+bind-dimensions-to-geometry
+build-constraint-graph
 validate-cadquery-step
 ```
 
 其中优先级最高的是：
 
 ```text
-validate-cadquery-step
+extract-dimensions
+bind-dimensions-to-geometry
 ```
+
+原因：当前 08 只提供保守语义特征候选，尚未把尺寸文本、尺寸线、箭头、引线和几何候选绑定起来。只有完成尺寸-几何绑定，CadQuery 生成才有足够的参数依据；`validate-cadquery-step` 则用于后续 CAD 执行闭环。
 
 这些命令完成后，正式链路就可以从：
 

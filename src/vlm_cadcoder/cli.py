@@ -335,6 +335,38 @@ def extract_view_features_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def extract_dimensions_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.dimension_extraction import extract_dimensions_samples
+
+    summary = extract_dimensions_samples(
+        dataflow_root=args.dataflow_root,
+        sample_id=args.sample_id,
+        prediction_jsonl_paths=args.prediction_jsonl,
+        include_copy=args.include_copy,
+        fail_fast=args.fail_fast,
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+    )
+    print(
+        f"Extracted dimensions for {summary.extracted_count} sample(s); "
+        f"skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote dimension extraction summary CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote dimension extraction summary JSON to {summary.json_path}")
+    for record in summary.records:
+        if record.skipped:
+            print(f"[skipped] {record.sample_id}: copy sample")
+        elif record.error:
+            print(f"[failed] {record.sample_id}: {record.error}")
+        else:
+            print(f"[extracted] {record.sample_id}: {record.dimension_count} dimension candidate(s) -> {record.output_path}")
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def generate_geometry_core_unet_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.dataflow.geometry_core_unet import (
         DEFAULT_INFERENCE_OVERRIDES,
@@ -685,6 +717,16 @@ def main() -> None:
     view_features_parser.add_argument("--output-csv")
     view_features_parser.add_argument("--output-json")
     view_features_parser.set_defaults(func=extract_view_features_cli)
+
+    dimensions_parser = subparsers.add_parser("extract-dimensions")
+    dimensions_parser.add_argument("--sample-id")
+    dimensions_parser.add_argument("--dataflow-root", default="DataFlow")
+    dimensions_parser.add_argument("--prediction-jsonl", action="append", default=[])
+    dimensions_parser.add_argument("--include-copy", action="store_true")
+    dimensions_parser.add_argument("--fail-fast", action="store_true")
+    dimensions_parser.add_argument("--output-csv")
+    dimensions_parser.add_argument("--output-json")
+    dimensions_parser.set_defaults(func=extract_dimensions_cli)
 
     geometry_core_parser = subparsers.add_parser("generate-geometry-core-unet")
     geometry_core_parser.add_argument("--dataflow-root", default="DataFlow")

@@ -189,34 +189,34 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 
 ## 8 当前原型
 
-当前代码仍处于早期验证阶段：
+当前仓库保留了早期直接 VLM-to-CAD 验证脚本：
 
 - `test_internvl.py`：测试 InternVL 对单张图纸的 FreeCAD 代码生成能力；
 - `Sketch2CAD.py`：调用 InternVL 生成 FreeCAD 脚本，并尝试通过 FreeCAD 导出 STEP；
 - `generated_freecad.py`：简单 FreeCAD 建模脚本示例。
 
-当前已新增第一版工程骨架：
+当前已形成第一版工程化数据流骨架：
 
 - `configs/`：模型、benchmark 任务和 DataFlow 配置；
 - `data/`：样本索引、benchmark split 和人工标注目录；
-- `src/vlm_cadcoder/dataflow/`：PDF 渲染、样本索引和阶段产物管理；
+- `src/vlm_cadcoder/dataflow/`：PDF 渲染、layout cleaning、view filter、single-view audit、view classification、geometry core U-Net 调用、geometry repair、primitive repair、geometry audit、DrawingIR 构建和 08 特征候选抽取；
 - `src/vlm_cadcoder/models/`：可插拔 VLM/OCR 模型适配器接口；
 - `src/vlm_cadcoder/benchmarks/model_screening/`：小模型筛选 benchmark 任务、prompt、runner 和评测函数；
 - `src/vlm_cadcoder/ir/`：DrawingIR 数据结构；
-- `src/vlm_cadcoder/cad/`：后续 CadQuery 代码生成与几何校验模块入口。
+- `src/vlm_cadcoder/cad/`：外部 crops 原型闭环、CadQuery prompt、规则草稿和 LLM 输出后处理入口。
 
-后续需要补充真实实现：
+后续需要重点补充：
 
-- 数据集与标注格式；
-- 图纸结构化解析模块；
-- 约束图表示与校验模块；
-- CAD 代码生成模块；
-- 执行、渲染、评测与修复模块；
-- 实验脚本和结果记录。
+- 尺寸文本、尺寸线、箭头、引线和局部标注的结构化抽取；
+- 尺寸-几何绑定算法和可复核标注格式；
+- ConstraintGraph 表示、约束一致性检查和跨视图对应；
+- 约束感知 CadQuery 代码生成，而不是直接依赖 VLM 一步生成代码；
+- CAD 执行、STEP 导出、渲染、尺寸校验和修复闭环；
+- 面向论文实验的指标、消融脚本和结果记录。
 
 ## 9 项目进度与当前阶段
 
-截至 2026-06-13，项目已完成 `01.RawPDFWithSTEP -> 07.ViewClassification` 的第一版数据流闭环，并接入外部 U-Net 工具生成 `geometry_core.png`。当前重点不是直接追求完整 CAD 自动生成，而是先把图纸理解输入质量、页面清理、视图检测、单视图裁剪、几何核心图净化和小模型筛选 benchmark 固化成可复现、可评测的工程基础，然后进入特征抽取、尺寸-几何绑定和 DrawingIR 扩展。
+截至 2026-06-17，项目已完成 `01.RawPDFWithSTEP -> 08.Multi-viewFeatureExtraction` 的第一版数据流骨架，并形成外部 crops 到 CadQuery 原型代码的下游验证链路。当前重点不是直接追求完整 CAD 自动生成，而是先把图纸理解输入质量、页面清理、视图检测、单视图裁剪、几何核心图净化、几何修复候选、质量审计、DrawingIR v0.1 和语义特征候选固化成可复现、可评测的工程基础，然后进入尺寸-几何绑定与约束图构建。
 
 ### 9.1 已完成事项
 
@@ -239,10 +239,13 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 - 接入 SketchSegment 作为 `04 -> 05` 的视图候选检测工具，并在 LLM-CADCoder 中加入 `ViewCandidateFilter` 后置过滤；
 - 通过 SketchSegment 导出脚本完成 `05 -> 06` 单视图裁剪，当前 `DataFlow/06.SingleViews/` 已形成一批自动裁剪样本；
 - 接入外部 `SketchPic2ViewPic` U-Net 推理项目，通过 `generate-geometry-core-unet` 将 `clean_view_with_annotations.png` 净化为 `geometry_core.png`、mask、prob 和 metadata；
+- 实现 `repair-geometry-core`，对 U-Net 净化后出现的水平/竖直小断线和极小碎片进行轻量修复，输出独立 sidecar 产物，不覆盖原始 `geometry_core.png`；
+- 实现 `repair-geometry-primitives`，保守生成 `circle_arc` 几何基元修复候选，并可显式开启 `line` 候选用于消融；孤立闭合矩形框默认进入 rejected candidates，避免把标注框或局部框误当作 CAD 几何；
 - 实现 `audit-geometry-core`，可结合 `07.ViewClassification` 对正式非轴测视图的 `geometry_core` 进行机器初筛和 A/B/C 质量分层，并通过 `geometry_core_audit_overrides.json` 记录人工排除与质量覆盖，作为后续特征抽取的质量门控；
 - 实现 `audit-single-views` 和 `classify-views`，可对 `05/06` 一致性进行审计，并生成 `07.ViewClassification` 的启发式视图类型 baseline；
 - 实现 `build-drawing-ir`，可从 `05.ViewDetection`、`06.SingleViews`、`07.ViewClassification` 和 `geometry_core_audit.json` 生成正式链路的 DrawingIR v0.1，并对 A 类 `geometry_core.png` 抽取低层 `geometry_component` 候选；
 - 实现 `extract-view-features`，可读取 DrawingIR v0.1 中的 `geometry_component`，生成 `08.Multi-viewFeatureExtraction/<sample_id>/view_features.json`，把低层连通域保守提升为 `outer_profile_candidate`、`hole_candidate`、`slot_candidate`、`annotation_residue_candidate` 和 `unknown_geometry_candidate` 等待复核语义候选；
+- 实现 `extract-dimensions` MVP，可读取 DrawingIR 视图来源和 `dimension_ocr` 预测 JSONL，生成 `08.Multi-viewFeatureExtraction/<sample_id>/dimension_candidates.json`，保留尺寸文本、归一化文本、类型、可选 bbox、主数值、数量、公差和来源；
 - 已在 `DataFlow/LayoutSamples/`、`DataFlow/03.LayoutAnalysis/`、`DataFlow/04.CleanPNG/`、`DataFlow/05.ViewDetection/` 和 `DataFlow/06.SingleViews/` 上进行若干样例验证，当前清理与裁剪策略以“保留视图及其相关标注、去除表格/边框/页面元信息”为目标。
 
 已完成的 benchmark 工程骨架：
@@ -261,7 +264,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 
 ```text
 第二阶段：图纸理解和中间表示抽取
-当前子阶段：geometry_core 质量门控、DrawingIR v0.1 构建、低层几何候选抽取与 08 语义候选生成
+当前子阶段：geometry_core 质量门控、几何修复候选、DrawingIR v0.1、08 语义/尺寸候选生成与尺寸-几何绑定准备
 ```
 
 当前阶段的核心目标是：
@@ -270,7 +273,9 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 - 建立稳定的页面级 layout cleaning 流程，降低整张 A4/A3 图纸中边框、标题栏和表格对 VLM 的干扰；
 - 建立自动 `05.ViewDetection` 与 `06.SingleViews` 视图裁剪流程，并对其进行人工验收和定量评估；
 - 为每个正式 view 生成 `geometry_core.png`，让后续特征识别同时拥有“带标注视图”和“干净几何视图”两种输入；
+- 对 `geometry_core.png` 生成轻量拓扑修复和基元修复候选，用于审计、消融和后续特征识别增强，但不直接替代原始几何输入；
 - 基于 DrawingIR 中的低层 `geometry_component` 生成第一版可复核语义特征候选，为尺寸-几何绑定和约束图构建提供特征侧输入；
+- 基于 `dimension_ocr` 预测生成第一版可复核尺寸候选，为后续尺寸-几何绑定提供尺寸侧输入；
 - 允许使用外部方法切好的 `DataFlow/06.SingleViews/testView2CAD/` crops 作为临时原型输入，提前验证后续 DrawingIR、特征抽取和 CadQuery 代码生成流程；
 - 形成可复现的小模型筛选 benchmark；
 - 比较 InternVL、Qwen-VL、PaddleOCR-VL 等候选模型在工程图纸理解任务上的表现；
@@ -280,7 +285,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 当前尚未进入：
 
 - 大规模模型训练或微调；
-- 完整 DrawingIR 自动生成，当前已完成视图级骨架、低层几何候选和保守语义候选，尚未完成尺寸、最终语义特征验证和约束图；
+- 完整 DrawingIR 自动生成，当前已完成视图级骨架、低层几何候选、几何修复候选、保守语义候选和尺寸候选，尚未完成尺寸-几何绑定、最终语义特征验证和约束图；
 - 尺寸-几何绑定算法定型；
 - ConstraintGraph 自动构建；
 - 正式的 CadQuery 脚本生成模块；
@@ -293,16 +298,16 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 
 近期优先任务按依赖关系排列：
 
-1. 冻结一版 `01 -> 06` 数据流版本，记录 layout cleaner、SketchSegment 权重、view filter 和导出脚本版本；
-2. 对 `06.SingleViews` 做人工验收表，标记 expected view count、actual view count、false positive、missed view、crop quality 和备注；
-3. 统一 `05.ViewDetection` 与 `06.SingleViews` 的来源关系，确保 `06` 只由过滤后的 `05/page_001_views.json` 导出；
-4. 将 `copy`、旧版本或未过滤样本隔离为失败分析/消融样本，避免污染正式评测；
-5. 在服务器上批量运行 `generate-geometry-core-unet`，检查 `geometry_core.png` 是否稳定保留几何轮廓并去除尺寸/PMI 干扰；
-6. 使用 `audit-geometry-core` 生成质量审计表和 contact sheet，对正式非轴测视图中的 B/C 类样本做人工复核，并把人工修正写入 `geometry_core_audit_overrides.json`；
-7. 人工复核 `07.ViewClassification` 中低置信度或 `needs_manual_review=true` 的视图类型，形成第一版主视图/侧视图/俯视图/轴测图标签；
-8. 批量运行并审计 `extract-view-features`，检查 `hole_candidate`、`slot_candidate`、`outer_profile_candidate` 等候选是否与人工观察一致，并整理失败类型；
-9. 跑通 `view_count`、`view_classification`、`dimension_ocr`、`feature_count`、`json_stability` 五个小模型筛选任务，并比较 full page、clean page、single-view crop、geometry_core 四种输入；
-10. 基于评测结果确定主 VLM、OCR 工具、layout/view crop/geometry core 工具组合和后续 DrawingIR 扩展方式。
+1. 冻结一版 `01 -> 08` 数据流版本，记录 layout cleaner、SketchSegment 权重、view filter、SketchPic2ViewPic U-Net 权重、geometry repair 参数和 primitive repair 参数；
+2. 对 `05.ViewDetection`、`06.SingleViews`、`07.ViewClassification` 和 `geometry_core_audit` 做联合人工验收，明确哪些样本可进入正式特征抽取；
+3. 对 `geometry_core_repaired.png` 与 `geometry_core_primitive_repaired.png` 做消融评估，判断它们更适合作为特征识别输入、审计证据，还是只作为失败分析 sidecar；
+4. 批量运行并审计 `extract-view-features`，检查 `hole_candidate`、`slot_candidate`、`outer_profile_candidate` 等候选是否与人工观察一致，并整理误检/漏检类型；
+5. 批量运行并审计 `extract-dimensions`，检查 `dimension_candidates.json` 中的尺寸文本、类型、数量、数值、公差和 view 归属是否可信；
+6. 设计 `bind-dimensions-to-geometry` 模块，把尺寸候选与 08 中的几何/语义候选进行绑定，输出可复核的尺寸-几何关系；
+7. 在尺寸绑定基础上定义 `ConstraintGraph` v0.1，表达孔、槽、外轮廓、阵列、对称、同轴、平行/垂直等约束；
+8. 继续跑通 `view_count`、`view_classification`、`dimension_ocr`、`feature_count`、`json_stability` 五个小模型筛选任务，并比较 full page、clean page、single-view crop、geometry_core 和 repaired/primitive repaired 输入；
+9. 基于评测结果确定主 VLM、OCR 工具、layout/view crop/geometry core/repair 工具组合和后续 DrawingIR 扩展方式；
+10. 在外部 crops 原型链路中补 `validate-cadquery-step`，为后续 CAD 执行反馈和 STEP 几何校验做准备。
 
 ### 9.4 后续阶段计划
 
@@ -311,8 +316,8 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 | 阶段 | 目标 | 主要产物 | 状态 |
 | --- | --- | --- | --- |
 | 阶段 1：课题收敛与数据准备 | 明确博士主线、样本范围和数据流 | README、DataFlow、初始 PDF/STEP 数据 | 已完成第一版，持续补充 |
-| 阶段 2：图纸理解与模型筛选 | 评估小参数 VLM/OCR 模型的图纸理解能力，建立 layout/view crop/geometry core 数据流 | model-screening benchmark、layout cleaning、view crop、geometry core、质量审计、评测报告 | `01 -> 07` 已形成基线，U-Net 净化和质量审计已接入 |
-| 阶段 3：DrawingIR 构建 | 从 page/view crops 抽取视图、尺寸、标注和特征候选 | DrawingIR JSON、标注规范 | v0.1 已接入 geometry_core 质量门控、低层几何候选和 08 语义候选，下一步补尺寸识别、特征验证与尺寸绑定 |
+| 阶段 2：图纸理解与模型筛选 | 评估小参数 VLM/OCR 模型的图纸理解能力，建立 layout/view crop/geometry core 数据流 | model-screening benchmark、layout cleaning、view crop、geometry core、修复候选、质量审计、评测报告 | `01 -> 08` 已形成第一版骨架，U-Net 净化、拓扑修复、基元修复候选和质量审计已接入 |
+| 阶段 3：DrawingIR 构建 | 从 page/view crops 抽取视图、尺寸、标注和特征候选 | DrawingIR JSON、标注规范 | v0.1 已接入 geometry_core 质量门控、低层几何候选、08 语义候选和尺寸候选，下一步补特征验证与尺寸绑定 |
 | 阶段 4：尺寸-几何绑定与约束图 | 建立尺寸标注、几何实体和多视图关系 | ConstraintGraph、绑定算法、F1 指标 | 待完成 |
 | 阶段 5：CadQuery 代码生成 | 将结构化图纸知识转为参数化建模脚本 | CadQuery 代码、STEP 模型 | 可用外部 crops 做临时原型 |
 | 阶段 6：执行反馈与修复 | 根据 CAD 执行、渲染和尺寸误差修复代码 | 修复日志、几何校验报告 | 待完成 |
@@ -324,6 +329,8 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 
 - PDF 图纸渲染质量会直接影响 OCR、视图切分和尺寸绑定结果；
 - layout cleaning 若误删视图线或局部标注，会直接影响后续 DrawingIR 和 CAD 参数生成，因此必须保留 overlay、mask 和 removed-region crops 便于追溯；
+- U-Net 去标注可能误删真实几何线，`repair-geometry-core` 和 `repair-geometry-primitives` 只能缓解局部断裂，不能代替可靠的特征识别和人工验收；
+- 几何基元拟合可能误把圆形/矩形标注框识别为 CAD 轮廓，因此当前 primitive repair 只作为候选产物，不自动进入约束图；
 - 外部工具切好的 `testView2CAD` crops 可以用于后半段原型验证，但必须记录其来源，不能作为自动 view detection 方法的正式评测结果；
 - VLM 对工程图纸的全局理解能力不等于尺寸-几何绑定能力，必须单独评测；
 - 仅靠 VLM 直接输出 CAD 代码不稳定，应作为 baseline，而不是主方法；
