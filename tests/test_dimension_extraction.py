@@ -71,6 +71,32 @@ def test_extract_dimensions_samples_writes_batch_summary(tmp_path: Path) -> None
     assert summary_json["records"][0]["dimension_count"] == 3
 
 
+def test_extract_dimensions_matches_absolute_prediction_image_to_relative_drawing_ir_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    dataflow = Path("DataFlow")
+    sample_id = "Part-Absolute"
+    _write_drawing_ir(dataflow, sample_id)
+    absolute_image = (
+        tmp_path / "DataFlow" / "06.SingleViews" / sample_id / "view_001" / "clean_view_with_annotations.png"
+    )
+    predictions_path = tmp_path / "predictions.jsonl"
+    _write_prediction_jsonl(predictions_path, sample_id, input_images=[absolute_image.as_posix()])
+
+    result = extract_dimensions_sample(
+        sample_id=sample_id,
+        dataflow_root=dataflow,
+        prediction_jsonl_paths=[predictions_path],
+    )
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    assert result.dimension_count == 3
+    assert data["dimension_candidates"][0]["view_id"] == "view_001"
+    assert data["unmatched_records"] == []
+
+
 def test_extract_dimensions_cli_writes_single_sample_output(tmp_path: Path) -> None:
     dataflow = tmp_path / "DataFlow"
     _write_drawing_ir(dataflow, "Part-CLI")
@@ -131,12 +157,13 @@ def _write_drawing_ir(dataflow: Path, sample_id: str) -> None:
     (target / "drawing_ir.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _write_prediction_jsonl(path: Path, sample_id: str) -> None:
+def _write_prediction_jsonl(path: Path, sample_id: str, input_images: list[str] | None = None) -> None:
     record = {
         "sample_id": sample_id,
         "task": "dimension_ocr",
         "model": "qwen2_5_vl_3b",
-        "input_images": [f"DataFlow/06.SingleViews/{sample_id}/view_001/clean_view_with_annotations.png"],
+        "input_images": input_images
+        or [f"DataFlow/06.SingleViews/{sample_id}/view_001/clean_view_with_annotations.png"],
         "prediction": {
             "dimensions": [
                 {

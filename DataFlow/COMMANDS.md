@@ -53,7 +53,7 @@ $env:PYTHONPATH="src"
 | `geometry_core -> primitive repair` | 已实现 MVP | 保守生成 circle_arc 基元修复候选，line 需显式开启；拒绝孤立闭合矩形框 |
 | `geometry_core -> audit` | 已实现 | 对 geometry core 进行质量分层，输出 CSV/JSON/contact sheet |
 | `06 -> 07` | 已实现基线 | 根据 view bbox 几何和页面位置生成启发式视图类型 baseline |
-| `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务 |
+| `06 -> benchmark` | 已实现 | 使用 single-view crops 跑 VLM 小模型任务，支持从 DrawingIR 批量运行正式非轴测视图 |
 | `07 + geometry_core audit -> 10` | 已实现初版 | 从 05/06/07 生成 DrawingIR，并把 A 类 geometry_core 转为低层几何候选 |
 | `10 -> 08` | 已实现初版 | 把 `geometry_component` 低层候选提升为保守语义特征候选，供人工复核和后续约束绑定 |
 | `10 + dimension_ocr -> 08` | 已实现 MVP | 读取 DrawingIR 和 VLM/OCR `dimension_ocr` 预测，生成可复核尺寸候选 |
@@ -1211,33 +1211,63 @@ DataFlow/08.Multi-viewFeatureExtraction/dimension_extraction_summary.csv
 DataFlow/08.Multi-viewFeatureExtraction/dimension_extraction_summary.json
 ```
 
-先用 VLM/OCR 跑单视图尺寸识别，例如：
-
-```bash
-python -m vlm_cadcoder.benchmarks.model_screening.runner \
-  --model qwen2_5_vl_3b \
-  --task dimension_ocr \
-  --image DataFlow/06.SingleViews/M001-08-006-B/view_001/clean_view_with_annotations.png \
-  --output-root experiments/dimension_ocr
-```
-
-再把 `predictions.jsonl` 汇总为尺寸候选：
+推荐先用单条命令扫描 DrawingIR 中所有正式非轴测视图。模型只加载一次，并将所有结果写入同一个 run dir：
 
 ```bash
 export PYTHONPATH=src
 
-python -m vlm_cadcoder.cli extract-dimensions \
-  --sample-id M001-08-006-B \
+python -m vlm_cadcoder.benchmarks.model_screening.runner \
+  --model qwen2_5_vl_3b \
+  --single-views \
   --dataflow-root DataFlow \
-  --prediction-jsonl experiments/dimension_ocr/<run_dir>/predictions.jsonl
+  --output-root experiments/dimension_ocr_single_views
 ```
 
-批量处理多个 DrawingIR 样本：
+只处理单个样本：
+
+```bash
+python -m vlm_cadcoder.benchmarks.model_screening.runner \
+  --model qwen2_5_vl_3b \
+  --single-views \
+  --sample-id X476-07-011-C \
+  --dataflow-root DataFlow \
+  --output-root experiments/dimension_ocr_single_views
+```
+
+`--single-views` 默认执行 `dimension_ocr`，并且：
+
+```text
+只读取 DataFlow/10.StructuredCADRepresentation/*/drawing_ir.json 中的正式 views
+使用每个 view 的 image_clean
+默认跳过 type=isometric
+为每条 prediction 写入 sample_id 和 view_id
+一个运行目录只生成一个 predictions.jsonl
+```
+
+如需把轴测图也纳入输入，可显式传入 `--include-isometric`。
+
+运行结束后，终端会打印真实 run dir，例如：
+
+```text
+experiments/dimension_ocr_single_views/20260620_153012_qwen2_5_vl_3b_dimension_ocr_single_views
+```
+
+再使用这个真实路径生成单个样本的尺寸候选：
+
+```bash
+
+python -m vlm_cadcoder.cli extract-dimensions \
+  --sample-id X476-07-011-C \
+  --dataflow-root DataFlow \
+  --prediction-jsonl experiments/dimension_ocr_single_views/20260620_153012_qwen2_5_vl_3b_dimension_ocr_single_views/predictions.jsonl
+```
+
+对同一份 predictions 批量生成所有样本的尺寸候选：
 
 ```bash
 python -m vlm_cadcoder.cli extract-dimensions \
   --dataflow-root DataFlow \
-  --prediction-jsonl experiments/dimension_ocr/<run_dir>/predictions.jsonl
+  --prediction-jsonl experiments/dimension_ocr_single_views/20260620_153012_qwen2_5_vl_3b_dimension_ocr_single_views/predictions.jsonl
 ```
 
 可以重复传入多个预测文件：

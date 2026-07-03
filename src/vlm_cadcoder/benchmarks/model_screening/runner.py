@@ -91,6 +91,67 @@ def run_split_screening(
     return run_dir
 
 
+def run_single_view_screening(
+    model_name: str,
+    task_name: str = "dimension_ocr",
+    model_config_path: str | Path = "configs/models.json",
+    output_root: str | Path = "experiments/dimension_ocr_single_views",
+    dataflow_root: str | Path = "DataFlow",
+    sample_id: str | None = None,
+    include_isometric: bool = False,
+) -> Path:
+    model_config = read_config(model_config_path)
+    models = model_config.get("models", {})
+    if model_name not in models:
+        raise KeyError(f"Model not found in config: {model_name}")
+
+    tasks = default_tasks(Path(__file__).parent / "prompts")
+    if task_name not in tasks:
+        raise KeyError(f"Unsupported task: {task_name}")
+
+    cases, skipped_views = _formal_single_view_cases(
+        dataflow_root=Path(dataflow_root),
+        sample_id=sample_id,
+        include_isometric=include_isometric,
+    )
+    model = build_model(model_name, models[model_name])
+    run_dir = Path(output_root) / f"{datetime.now():%Y%m%d_%H%M%S}_{model_name}_{task_name}_single_views"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    predictions_path = run_dir / "predictions.jsonl"
+    predictions_path.touch()
+
+    records: list[dict[str, Any]] = []
+    for case in cases:
+        record = _run_one_case(
+            model=model,
+            model_name=model_name,
+            task_name=task_name,
+            image_paths=[case["image_path"]],
+            ground_truth=None,
+            sample_id=case["sample_id"],
+            view_id=case["view_id"],
+        )
+        records.append(record)
+        append_jsonl(predictions_path, record)
+
+    write_json(run_dir / "metrics.json", _aggregate_metrics(records))
+    write_json(
+        run_dir / "config.json",
+        {
+            "model": model_name,
+            "task": task_name,
+            "model_config_path": str(model_config_path),
+            "dataflow_root": str(dataflow_root),
+            "sample_id": sample_id,
+            "input_mode": "formal_single_views_from_drawing_ir",
+            "include_isometric": include_isometric,
+            "processed_view_count": len(cases),
+            "skipped_views": skipped_views,
+        },
+    )
+    return run_dir
+
+
 def _run_one_case(
     model: Any,
     model_name: str,
@@ -98,6 +159,7 @@ def _run_one_case(
     image_paths: list[str | Path],
     ground_truth: Any | None,
     sample_id: str | None = None,
+    view_id: str | None = None,
 ) -> dict[str, Any]:
     tasks = default_tasks(Path(__file__).parent / "prompts")
     if task_name not in tasks:
@@ -110,11 +172,11 @@ def _run_one_case(
     )
     parsed = response.parsed_json if response.parsed_json is not None else parse_json_object(response.text)
     score = _score_task(task_name, parsed, ground_truth)
-    return {
+    record = {
         "sample_id": sample_id,
         "task": task_name,
         "model": model_name,
-        "input_images": [str(path) for path in image_paths],
+        "input_images": [Path(path).as_posix() for path in image_paths],
         "prediction_text": response.text,
         "prediction": parsed,
         "ground_truth": ground_truth,
@@ -123,6 +185,94 @@ def _run_one_case(
         "latency_sec": response.latency_sec,
         "error": response.error,
     }
+    if view_id is not None:
+        record["view_id"] = view_id
+    return record
+
+
+def _formal_single_view_cases(
+    *,
+    dataflow_root: Path,
+    sample_id: str | None,
+    include_isometric: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    structured_root = dataflow_root / "10.StructuredCADRepresentation"
+    if sample_id:
+        drawing_ir_paths = [structured_root / sample_id / "drawing_ir.json"]
+    elif not structured_root.exists():
+        drawing_ir_paths = []
+    else:
+        drawing_ir_paths = sorted(structured_root.glob("*/drawing_ir.json"))
+
+    cases: list[dict[str, Any]] = []
+    skipped_views: list[dict[str, Any]] = []
+    for drawing_ir_path in drawing_ir_paths:
+        if not drawing_ir_path.exists():
+            raise FileNotFoundError(f"Missing DrawingIR file: {drawing_ir_path}")
+        drawing_ir = read_config(drawing_ir_path)
+        current_sample_id = str(drawing_ir.get("sample_id") or drawing_ir_path.parent.name)
+        views = drawing_ir.get("views")
+        if drawing_ir.get("schema") != "drawing_ir" or not isinstance(views, list):
+            raise ValueError(f"Invalid DrawingIR file: {drawing_ir_path}")
+
+        for view in views:
+            if not isinstance(view, dict):
+                continue
+            view_id = str(view.get("id") or view.get("view_id") or "")
+            if not view_id:
+                continue
+            view_type = str(view.get("type") or "unknown")
+            if view_type == "isometric" and not include_isometric:
+                skipped_views.append(
+                    {
+                        "sample_id": current_sample_id,
+                        "view_id": view_id,
+                        "view_type": view_type,
+                        "reason": "isometric_view_excluded",
+                    }
+                )
+                continue
+            image_text = view.get("image_clean")
+            if not isinstance(image_text, str) or not image_text:
+                skipped_views.append(
+                    {
+                        "sample_id": current_sample_id,
+                        "view_id": view_id,
+                        "view_type": view_type,
+                        "reason": "missing_clean_view_path",
+                    }
+                )
+                continue
+            image_path = _resolve_dataflow_path(dataflow_root, image_text)
+            if not image_path.exists():
+                skipped_views.append(
+                    {
+                        "sample_id": current_sample_id,
+                        "view_id": view_id,
+                        "view_type": view_type,
+                        "reason": "missing_clean_view_image",
+                        "image_path": image_path.as_posix(),
+                    }
+                )
+                continue
+            cases.append(
+                {
+                    "sample_id": current_sample_id,
+                    "view_id": view_id,
+                    "view_type": view_type,
+                    "image_path": image_path,
+                }
+            )
+    return cases, skipped_views
+
+
+def _resolve_dataflow_path(dataflow_root: Path, path_text: str) -> Path:
+    path = Path(path_text)
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == dataflow_root.name:
+        return dataflow_root.parent / path
+    return dataflow_root / path
 
 
 def _score_task(task_name: str, prediction: Any, ground_truth: Any | None) -> float | None:
@@ -163,9 +313,24 @@ def main() -> None:
     parser.add_argument("--dpi", type=int, default=600)
     parser.add_argument("--model-config", default="configs/models.json")
     parser.add_argument("--output-root", default="experiments/model_screening")
+    parser.add_argument("--single-views", action="store_true")
+    parser.add_argument("--sample-id")
+    parser.add_argument("--include-isometric", action="store_true")
     args = parser.parse_args()
 
-    if args.split:
+    if args.single_views:
+        if args.split or args.image:
+            raise SystemExit("Do not combine --single-views with --split or --image.")
+        run_dir = run_single_view_screening(
+            model_name=args.model,
+            task_name=args.task or "dimension_ocr",
+            model_config_path=args.model_config,
+            output_root=args.output_root,
+            dataflow_root=args.dataflow_root,
+            sample_id=args.sample_id,
+            include_isometric=args.include_isometric,
+        )
+    elif args.split:
         run_dir = run_split_screening(
             model_name=args.model,
             split_path=args.split,

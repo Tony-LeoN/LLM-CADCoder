@@ -245,6 +245,7 @@ CAM 生成不作为当前主线，而作为 CAD 模型生成后的工程应用�
 - 实现 `audit-single-views` 和 `classify-views`，可对 `05/06` 一致性进行审计，并生成 `07.ViewClassification` 的启发式视图类型 baseline；
 - 实现 `build-drawing-ir`，可从 `05.ViewDetection`、`06.SingleViews`、`07.ViewClassification` 和 `geometry_core_audit.json` 生成正式链路的 DrawingIR v0.1，并对 A 类 `geometry_core.png` 抽取低层 `geometry_component` 候选；
 - 实现 `extract-view-features`，可读取 DrawingIR v0.1 中的 `geometry_component`，生成 `08.Multi-viewFeatureExtraction/<sample_id>/view_features.json`，把低层连通域保守提升为 `outer_profile_candidate`、`hole_candidate`、`slot_candidate`、`annotation_residue_candidate` 和 `unknown_geometry_candidate` 等待复核语义候选；
+- 扩展 model-screening runner 的 `--single-views` 模式，可一次加载模型并批量扫描 DrawingIR 中的正式非轴测视图，为每条 `dimension_ocr` prediction 写入 `sample_id` 和 `view_id`；
 - 实现 `extract-dimensions` MVP，可读取 DrawingIR 视图来源和 `dimension_ocr` 预测 JSONL，生成 `08.Multi-viewFeatureExtraction/<sample_id>/dimension_candidates.json`，保留尺寸文本、归一化文本、类型、可选 bbox、主数值、数量、公差和来源；
 - 已在 `DataFlow/LayoutSamples/`、`DataFlow/03.LayoutAnalysis/`、`DataFlow/04.CleanPNG/`、`DataFlow/05.ViewDetection/` 和 `DataFlow/06.SingleViews/` 上进行若干样例验证，当前清理与裁剪策略以“保留视图及其相关标注、去除表格/边框/页面元信息”为目标。
 
