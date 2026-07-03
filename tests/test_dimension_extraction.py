@@ -97,6 +97,69 @@ def test_extract_dimensions_matches_absolute_prediction_image_to_relative_drawin
     assert data["unmatched_records"] == []
 
 
+def test_extract_dimensions_splits_compound_diameter_and_chamfer_callout(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    sample_id = "Part-Compound"
+    _write_drawing_ir(dataflow, sample_id)
+    predictions_path = tmp_path / "predictions.jsonl"
+    _write_prediction_jsonl(
+        predictions_path,
+        sample_id,
+        dimensions=[
+            {
+                "text": "φ52完全贯穿孔口倒角C0.5",
+                "normalized": "φ52 fully penetrated hole chamfer C0.5",
+                "type": "diameter",
+            }
+        ],
+    )
+
+    result = extract_dimensions_sample(
+        sample_id=sample_id,
+        dataflow_root=dataflow,
+        prediction_jsonl_paths=[predictions_path],
+    )
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    candidates = data["dimension_candidates"]
+    assert result.dimension_count == 2
+    assert [(candidate["text"], candidate["dimension_type"], candidate["value"]) for candidate in candidates] == [
+        ("φ52完全贯穿孔口倒角C0.5", "diameter", 52.0),
+        ("C0.5", "chamfer", 0.5),
+    ]
+    assert candidates[1]["source"]["compound_parent_text"] == "φ52完全贯穿孔口倒角C0.5"
+    assert "compound_dimension_callout_split" in candidates[1]["review_reasons"]
+
+
+def test_extract_dimensions_does_not_split_standalone_chamfer_callout(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    sample_id = "Part-Chamfer"
+    _write_drawing_ir(dataflow, sample_id)
+    predictions_path = tmp_path / "predictions.jsonl"
+    _write_prediction_jsonl(
+        predictions_path,
+        sample_id,
+        dimensions=[
+            {
+                "text": "C0.5",
+                "normalized": "C0.5 chamfer",
+                "type": "chamfer",
+            }
+        ],
+    )
+
+    result = extract_dimensions_sample(
+        sample_id=sample_id,
+        dataflow_root=dataflow,
+        prediction_jsonl_paths=[predictions_path],
+    )
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    assert result.dimension_count == 1
+    assert data["dimension_candidates"][0]["text"] == "C0.5"
+    assert "compound_parent_text" not in data["dimension_candidates"][0]["source"]
+
+
 def test_extract_dimensions_cli_writes_single_sample_output(tmp_path: Path) -> None:
     dataflow = tmp_path / "DataFlow"
     _write_drawing_ir(dataflow, "Part-CLI")
@@ -157,7 +220,12 @@ def _write_drawing_ir(dataflow: Path, sample_id: str) -> None:
     (target / "drawing_ir.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _write_prediction_jsonl(path: Path, sample_id: str, input_images: list[str] | None = None) -> None:
+def _write_prediction_jsonl(
+    path: Path,
+    sample_id: str,
+    input_images: list[str] | None = None,
+    dimensions: list[dict[str, object]] | None = None,
+) -> None:
     record = {
         "sample_id": sample_id,
         "task": "dimension_ocr",
@@ -165,7 +233,8 @@ def _write_prediction_jsonl(path: Path, sample_id: str, input_images: list[str] 
         "input_images": input_images
         or [f"DataFlow/06.SingleViews/{sample_id}/view_001/clean_view_with_annotations.png"],
         "prediction": {
-            "dimensions": [
+            "dimensions": dimensions
+            or [
                 {
                     "text": "4 x Φ 4.5 完全贯穿",
                     "normalized": "4 x Φ 4.5 完全贯穿",

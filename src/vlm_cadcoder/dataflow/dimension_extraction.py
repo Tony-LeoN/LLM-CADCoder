@@ -78,7 +78,7 @@ def extract_dimensions_sample(
             continue
         for view_id in record["view_ids"]:
             view = views[view_id]
-            for item in record["dimensions"]:
+            for item in _expanded_dimension_items(record["dimensions"]):
                 candidate = _dimension_candidate(
                     item=item,
                     view=view,
@@ -280,12 +280,19 @@ def _dimension_candidate(
     value = _dimension_value(normalized, dimension_type, quantity)
     bbox = _bbox_or_none(item.get("bbox"))
     confidence = item.get("confidence")
+    compound_parent_text = str(item.get("compound_parent_text") or "").strip()
 
     review_reasons = ["dimension_ocr_candidate_needs_validation", "dimension_geometry_binding_not_built"]
     if not bbox:
         review_reasons.append("missing_dimension_bbox")
     if dimension_type == "unknown":
         review_reasons.append("unknown_dimension_type")
+    if compound_parent_text:
+        review_reasons.append("compound_dimension_callout_split")
+
+    candidate_source = dict(source)
+    if compound_parent_text:
+        candidate_source["compound_parent_text"] = compound_parent_text
 
     return {
         "id": f"{view_id}_dimension_{index:03d}",
@@ -304,9 +311,61 @@ def _dimension_candidate(
         "confidence": float(confidence) if confidence is not None else 0.35,
         "needs_manual_review": True,
         "review_reasons": review_reasons,
-        "source": source,
+        "source": candidate_source,
         "evidence": [f"raw_text={text}", f"normalized={normalized}"],
     }
+
+
+def _expanded_dimension_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for item in items:
+        expanded.append(item)
+        expanded.extend(_compound_dimension_items(item))
+    return expanded
+
+
+def _compound_dimension_items(item: dict[str, Any]) -> list[dict[str, Any]]:
+    text = str(item.get("text") or item.get("normalized") or "").strip()
+    normalized = str(item.get("normalized") or text).strip()
+    if not _has_compound_chamfer_context(text, normalized):
+        return []
+
+    tokens: list[str] = []
+    for source_text in (text, normalized):
+        for match in re.finditer(r"(?<![A-Za-z])C\s*[0-9]+(?:\.[0-9]+)?", source_text, flags=re.IGNORECASE):
+            token = re.sub(r"\s+", "", match.group(0))
+            if token.upper() not in {existing.upper() for existing in tokens}:
+                tokens.append(token)
+
+    return [
+        {
+            "text": token,
+            "normalized": token,
+            "type": "chamfer",
+            "bbox": item.get("bbox"),
+            "confidence": item.get("confidence"),
+            "compound_parent_text": text,
+        }
+        for token in tokens
+    ]
+
+
+def _has_compound_chamfer_context(text: str, normalized: str) -> bool:
+    combined = f"{text} {normalized}"
+    if not re.search(r"(?<![A-Za-z])C\s*[0-9]+(?:\.[0-9]+)?", combined, flags=re.IGNORECASE):
+        return False
+    compact_text = re.sub(r"\s+", "", text)
+    if re.fullmatch(r"C\s*[0-9]+(?:\.[0-9]+)?", compact_text, flags=re.IGNORECASE):
+        return False
+    if re.fullmatch(r"\d+\s*[-x×]\s*C\s*[0-9]+(?:\.[0-9]+)?", compact_text, flags=re.IGNORECASE):
+        return False
+    has_chamfer_word = "倒角" in combined or "chamfer" in combined.lower()
+    numeric_count = len(re.findall(r"[0-9]+(?:\.[0-9]+)?", combined))
+    return bool(
+        re.search(r"[ΦφØ⌀]\s*[0-9]+", combined)
+        or re.search(r"\bM\s*[0-9]+", combined, flags=re.IGNORECASE)
+        or (has_chamfer_word and numeric_count >= 2)
+    )
 
 
 def _dimension_type(source_type: str, normalized: str) -> str:
@@ -314,7 +373,7 @@ def _dimension_type(source_type: str, normalized: str) -> str:
     if lowered_source and lowered_source != "unknown":
         return lowered_source
     upper = normalized.upper().replace(" ", "")
-    if any(symbol in normalized for symbol in ("Φ", "Ø", "⌀")) or "DIA" in upper:
+    if any(symbol in normalized for symbol in ("Φ", "φ", "Ø", "⌀")) or "DIA" in upper:
         return "diameter"
     if re.search(r"(^|[^A-Z])R\s*\d", upper):
         return "radius"
@@ -345,7 +404,7 @@ def _leading_quantity(text: str) -> int | None:
 def _dimension_value(text: str, dimension_type: str, quantity: int | None) -> float | None:
     compact = text.strip().replace("×", "x")
     if dimension_type == "diameter":
-        match = re.search(r"[ΦØ⌀]\s*([0-9]+(?:\.[0-9]+)?)", compact, flags=re.IGNORECASE)
+        match = re.search(r"[ΦφØ⌀]\s*([0-9]+(?:\.[0-9]+)?)", compact, flags=re.IGNORECASE)
         if match:
             return float(match.group(1))
     if dimension_type == "thread":
