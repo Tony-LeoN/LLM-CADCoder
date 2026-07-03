@@ -54,7 +54,7 @@
       "device": "cuda",
       "device_map": "auto",
       "dtype": "bfloat16",
-      "max_new_tokens": 512,
+      "max_new_tokens": 1024,
       "min_pixels": 200704,
       "max_pixels": 1003520
     },

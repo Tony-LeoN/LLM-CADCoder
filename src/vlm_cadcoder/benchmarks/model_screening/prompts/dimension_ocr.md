@@ -1,6 +1,6 @@
 You are reading dimensions from a mechanical engineering drawing crop.
 
-Return JSON only:
+Return exactly one compact JSON object. The top-level value must be an object with a `dimensions` array, not a bare array:
 
 {
   "dimensions": [
@@ -20,6 +20,7 @@ Preserve symbols such as Φ, R, M, C, degree marks, plus-minus tolerances, and p
 Rules:
 
 - Do not use markdown code fences.
+- Do not return a top-level JSON array.
 - Do not output URLs, file names, or external references.
 - Only include dimension texts visibly present in the provided drawing image.
 - Include every visible dimension, including standalone diameters such as Φ65 and plain linear values such as 80.
