@@ -367,6 +367,42 @@ def extract_dimensions_cli(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def bind_dimensions_to_geometry_cli(args: argparse.Namespace) -> None:
+    from vlm_cadcoder.dataflow.dimension_geometry_binding import bind_dimensions_to_geometry_samples
+
+    summary = bind_dimensions_to_geometry_samples(
+        dataflow_root=args.dataflow_root,
+        sample_id=args.sample_id,
+        model_name=args.model,
+        model_config_path=args.model_config,
+        include_copy=args.include_copy,
+        fail_fast=args.fail_fast,
+        output_csv=args.output_csv,
+        output_json=args.output_json,
+    )
+    print(
+        f"Bound dimensions for {summary.bound_count} sample(s); "
+        f"skipped {summary.skipped_count}; failed {summary.failed_count}"
+    )
+    if summary.csv_path:
+        print(f"Wrote dimension-geometry binding summary CSV to {summary.csv_path}")
+    if summary.json_path:
+        print(f"Wrote dimension-geometry binding summary JSON to {summary.json_path}")
+    for record in summary.records:
+        if record.skipped:
+            print(f"[skipped] {record.sample_id}: copy sample")
+        elif record.error:
+            print(f"[failed] {record.sample_id}: {record.error}")
+        else:
+            print(
+                f"[bound] {record.sample_id}: {record.binding_candidate_count} binding candidate(s) "
+                f"from {record.dimension_count} dimension candidate(s) -> {record.output_path}"
+            )
+
+    if summary.failed_count:
+        raise SystemExit(1)
+
+
 def generate_geometry_core_unet_cli(args: argparse.Namespace) -> None:
     from vlm_cadcoder.dataflow.geometry_core_unet import (
         DEFAULT_INFERENCE_OVERRIDES,
@@ -727,6 +763,17 @@ def main() -> None:
     dimensions_parser.add_argument("--output-csv")
     dimensions_parser.add_argument("--output-json")
     dimensions_parser.set_defaults(func=extract_dimensions_cli)
+
+    bind_dimensions_parser = subparsers.add_parser("bind-dimensions-to-geometry")
+    bind_dimensions_parser.add_argument("--sample-id")
+    bind_dimensions_parser.add_argument("--dataflow-root", default="DataFlow")
+    bind_dimensions_parser.add_argument("--model")
+    bind_dimensions_parser.add_argument("--model-config", default="configs/models.json")
+    bind_dimensions_parser.add_argument("--include-copy", action="store_true")
+    bind_dimensions_parser.add_argument("--fail-fast", action="store_true")
+    bind_dimensions_parser.add_argument("--output-csv")
+    bind_dimensions_parser.add_argument("--output-json")
+    bind_dimensions_parser.set_defaults(func=bind_dimensions_to_geometry_cli)
 
     geometry_core_parser = subparsers.add_parser("generate-geometry-core-unet")
     geometry_core_parser.add_argument("--dataflow-root", default="DataFlow")

@@ -1295,6 +1295,56 @@ quality                   候选数量、未匹配记录数量和后续阻塞项
 - `value` 只表示文本中的主数值，例如 `4 x Φ 4.5` 会解析为 `quantity=4, value=4.5`；
 - 输出仍是候选层，`ready_for_dimension_geometry_binding=false`。正式参数必须等下一步 `bind-dimensions-to-geometry` 完成。
 
+### 8.3 `08.FeatureCandidates + 08.DimensionCandidates -> 09.DimensionGeometryBindings`
+
+用途：读取 `view_features.json` 和 `dimension_candidates.json`，为尺寸候选生成可复核的几何绑定候选。该阶段以视觉模型判断为主，规则/CV 只负责生成 top-k 几何候选、距离/类型证据和冲突检查；输出仍是候选层，不是最终约束图。
+
+先生成规则候选脚手架，便于本地检查输入是否齐全：
+
+```bash
+export PYTHONPATH=src
+
+python -m vlm_cadcoder.cli bind-dimensions-to-geometry \
+  --sample-id X476-07-011-C \
+  --dataflow-root DataFlow
+```
+
+服务器上接入视觉模型进行绑定判断：
+
+```bash
+python -m vlm_cadcoder.cli bind-dimensions-to-geometry \
+  --sample-id X476-07-011-C \
+  --dataflow-root DataFlow \
+  --model qwen2_5_vl_3b \
+  --model-config configs/models.json
+```
+
+输出：
+
+```text
+DataFlow/09.Cross-viewGeometricReasoning/<sample_id>/dimension_geometry_bindings.json
+DataFlow/09.Cross-viewGeometricReasoning/dimension_geometry_binding_summary.csv
+DataFlow/09.Cross-viewGeometricReasoning/dimension_geometry_binding_summary.json
+```
+
+`dimension_geometry_bindings.json` 主要包含：
+
+```text
+binding_candidates      规则生成的尺寸-几何绑定候选，供视觉模型和人工复核
+vlm_requests            每个 view 给视觉模型的编号候选上下文和 prompt
+vlm_responses           可选视觉模型输出
+unbound_dimensions      规则候选为空的尺寸
+ambiguous_bindings      规则 top 候选分数接近的歧义绑定
+quality                 是否可进入 ConstraintGraph；MVP 默认仍需人工复核
+```
+
+说明：
+
+- 规则候选只作为 `top-k target generation`，不等同于最终绑定；
+- 若 `view_features.json` 为空，MVP 会退回使用 DrawingIR 中的低层 `geometry_component` 作为 `unknown_geometry_candidate`，仅用于给视觉模型提供编号候选；
+- 对 `diameter/thread/chamfer/linear/angle` 做最小类型兼容过滤；
+- `ready_for_constraint_graph=false`，正式 ConstraintGraph 需等待绑定候选经视觉模型/人工复核后再生成。
+
 ## 9. `06.SingleViews + experiments -> 10.StructuredCADRepresentation + 11 prompt`
 
 用途：使用外部 single-view crops、clean 图、VLM benchmark 输出和 STEP 真值，生成最小 DrawingIR、建模计划和 CadQuery prompt。
