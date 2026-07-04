@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from vlm_cadcoder.dataflow.dimension_geometry_binding import bind_dimensions_to_geometry_sample
 
@@ -98,7 +101,29 @@ def test_bind_dimensions_to_geometry_falls_back_to_drawing_ir_components(tmp_pat
     assert data["binding_candidates"][0]["target_feature_id"] == "view_001_geometry_component_001"
 
 
+def test_bind_dimensions_to_geometry_writes_numbered_overlay(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    dataflow = tmp_path / "DataFlow"
+    _write_inputs(dataflow, "Part-Overlay")
+
+    result = bind_dimensions_to_geometry_sample(sample_id="Part-Overlay", dataflow_root=dataflow)
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    request = data["vlm_requests"][0]
+    overlay_path = dataflow / "09.Cross-viewGeometricReasoning" / "Part-Overlay" / "overlays" / "view_001_binding_overlay.png"
+    assert overlay_path.exists()
+    assert request["overlay_image"] == "DataFlow/09.Cross-viewGeometricReasoning/Part-Overlay/overlays/view_001_binding_overlay.png"
+    assert request["resolved_overlay_image"] == overlay_path.as_posix()
+    assert request["visual_labels"]["dimensions"][0]["label"] == "D1"
+    assert request["visual_labels"]["features"][0]["label"] == "G1"
+    assert "\"label\": \"D1\"" in request["prompt"]
+
+
 def _write_inputs(dataflow: Path, sample_id: str) -> None:
+    clean_view_path = dataflow / "06.SingleViews" / sample_id / "view_001" / "clean_view_with_annotations.png"
+    clean_view_path.parent.mkdir(parents=True)
+    clean_view_path.write_bytes(base64.b64decode(_ONE_PIXEL_PNG_BASE64))
+
     drawing_ir_dir = dataflow / "10.StructuredCADRepresentation" / sample_id
     drawing_ir_dir.mkdir(parents=True)
     drawing_ir = {
@@ -175,3 +200,26 @@ def _write_inputs(dataflow: Path, sample_id: str) -> None:
         ],
     }
     (feature_dir / "dimension_candidates.json").write_text(json.dumps(dimensions), encoding="utf-8")
+
+
+_ONE_PIXEL_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAZAAAAGQCAIAAAAP3aGbAAACcElEQVR4nO3BMQEAAADCoPVPbQwfoAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwZQF1AAGPd+bkAAAAAElF"
+    "TkSuQmCC"
+)

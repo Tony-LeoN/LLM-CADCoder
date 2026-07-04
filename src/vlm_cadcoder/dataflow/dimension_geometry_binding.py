@@ -125,7 +125,17 @@ def bind_dimensions_to_geometry_sample(
                     }
                 )
 
-    vlm_requests = _build_vlm_requests(root=root, views=views, rule_context_by_view=rule_context_by_view)
+    target = (
+        Path(output_path)
+        if output_path
+        else root / "09.Cross-viewGeometricReasoning" / sample_id / "dimension_geometry_bindings.json"
+    )
+    vlm_requests = _build_vlm_requests(
+        root=root,
+        views=views,
+        rule_context_by_view=rule_context_by_view,
+        overlay_dir=target.parent / "overlays",
+    )
     vlm_responses: list[dict[str, Any]] = []
     if model_name:
         vlm_responses = _run_vlm_binding(
@@ -185,12 +195,6 @@ def bind_dimensions_to_geometry_sample(
             model_name=model_name,
         ),
     }
-
-    target = (
-        Path(output_path)
-        if output_path
-        else root / "09.Cross-viewGeometricReasoning" / sample_id / "dimension_geometry_bindings.json"
-    )
     write_json(target, payload)
     return DimensionGeometryBindingResult(
         sample_id=sample_id,
@@ -373,14 +377,23 @@ def _build_vlm_requests(
     root: Path,
     views: dict[str, dict[str, Any]],
     rule_context_by_view: dict[str, dict[str, Any]],
+    overlay_dir: Path,
 ) -> list[dict[str, Any]]:
     requests = []
     for view_id, context in rule_context_by_view.items():
         view = views[view_id]
-        dimensions = context["dimensions"]
+        labeled_context, visual_labels = _labeled_rule_context(context)
+        dimensions = labeled_context["dimensions"]
         if not dimensions:
             continue
-        prompt = _binding_prompt(view_id=view_id, context=context)
+        overlay = _write_binding_overlay(
+            root=root,
+            view=view,
+            context=labeled_context,
+            visual_labels=visual_labels,
+            overlay_dir=overlay_dir,
+        )
+        prompt = _binding_prompt(view_id=view_id, context=labeled_context, visual_labels=visual_labels)
         requests.append(
             {
                 "id": f"{view_id}_vlm_binding_request",
@@ -389,12 +402,153 @@ def _build_vlm_requests(
                 "resolved_image_clean": _resolve_stage_path(root, view.get("image_clean")).as_posix()
                 if isinstance(view.get("image_clean"), str)
                 else None,
+                "overlay_image": _stage_path(root, overlay["path"]) if overlay.get("path") else None,
+                "resolved_overlay_image": overlay["path"].as_posix() if overlay.get("path") else None,
+                "overlay_error": overlay.get("error"),
+                "visual_labels": visual_labels,
                 "prompt": prompt,
                 "dimension_count": len(dimensions),
                 "rule_candidate_count": sum(len(item["rule_candidates"]) for item in dimensions),
             }
         )
     return requests
+
+
+def _labeled_rule_context(context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    feature_labels: dict[str, str] = {}
+    labeled_dimensions = []
+    visual_dimensions = []
+    visual_features: list[dict[str, Any]] = []
+
+    for dimension_index, block in enumerate(context.get("dimensions") or [], start=1):
+        dimension = dict(block.get("dimension") or {})
+        dimension_label = f"D{dimension_index}"
+        dimension["label"] = dimension_label
+        visual_dimensions.append(
+            {
+                "label": dimension_label,
+                "id": _id(dimension),
+                "text": dimension.get("text"),
+                "bbox": dimension.get("bbox"),
+                "bbox_on_page": dimension.get("bbox_on_page"),
+            }
+        )
+
+        labeled_candidates = []
+        for candidate in block.get("rule_candidates") or []:
+            candidate_copy = {key: value for key, value in candidate.items() if key != "feature"}
+            feature = dict(candidate.get("feature") or {})
+            feature_id = _id(feature)
+            if feature_id not in feature_labels:
+                feature_labels[feature_id] = f"G{len(feature_labels) + 1}"
+                visual_features.append(
+                    {
+                        "label": feature_labels[feature_id],
+                        "id": feature_id,
+                        "type": feature.get("type"),
+                        "bbox": feature.get("bbox"),
+                        "bbox_on_page": feature.get("bbox_on_page"),
+                    }
+                )
+            feature["label"] = feature_labels[feature_id]
+            candidate_copy["feature"] = feature
+            labeled_candidates.append(candidate_copy)
+
+        labeled_dimensions.append({"dimension": dimension, "rule_candidates": labeled_candidates})
+
+    return (
+        {"view_id": context.get("view_id"), "dimensions": labeled_dimensions},
+        {"dimensions": visual_dimensions, "features": visual_features},
+    )
+
+
+def _write_binding_overlay(
+    *,
+    root: Path,
+    view: dict[str, Any],
+    context: dict[str, Any],
+    visual_labels: dict[str, Any],
+    overlay_dir: Path,
+) -> dict[str, Any]:
+    image_text = view.get("image_clean")
+    if not isinstance(image_text, str):
+        return {"path": None, "error": "view_image_clean_missing"}
+    image_path = _resolve_stage_path(root, image_text)
+    if not image_path.exists():
+        return {"path": None, "error": f"view_image_clean_not_found: {image_path}"}
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return {"path": None, "error": "pillow_not_available"}
+
+    try:
+        overlay_dir.mkdir(parents=True, exist_ok=True)
+        target = overlay_dir / f"{context.get('view_id')}_binding_overlay.png"
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+        draw = ImageDraw.Draw(image)
+        font_size = max(18, min(72, round(max(image.size) / 48)))
+        line_width = max(3, round(max(image.size) / 900))
+        font = _overlay_font(ImageFont, font_size)
+        _draw_labeled_boxes(
+            draw=draw,
+            items=visual_labels.get("features") or [],
+            color=(219, 68, 55),
+            font=font,
+            line_width=line_width,
+            font_size=font_size,
+        )
+        _draw_labeled_boxes(
+            draw=draw,
+            items=visual_labels.get("dimensions") or [],
+            color=(30, 136, 229),
+            font=font,
+            line_width=line_width,
+            font_size=font_size,
+        )
+        image.save(target)
+        return {"path": target, "error": None}
+    except Exception as exc:  # pragma: no cover - image codecs and corrupt user files vary by environment
+        return {"path": None, "error": f"overlay_write_failed: {exc}"}
+
+
+def _overlay_font(image_font: Any, font_size: int) -> Any:
+    for font_name in ("arial.ttf", "DejaVuSans-Bold.ttf"):
+        try:
+            return image_font.truetype(font_name, font_size)
+        except OSError:
+            continue
+    return image_font.load_default()
+
+
+def _draw_labeled_boxes(
+    *,
+    draw: Any,
+    items: list[dict[str, Any]],
+    color: tuple[int, int, int],
+    font: Any,
+    line_width: int,
+    font_size: int,
+) -> None:
+    for item in items:
+        bbox = _bbox_or_none(item.get("bbox"))
+        if bbox is None:
+            continue
+        label = str(item.get("label") or "")
+        draw.rectangle(bbox, outline=color, width=line_width)
+        text_x = bbox[0]
+        text_y = max(0, bbox[1] - font_size - 8)
+        text_bbox = draw.textbbox((text_x, text_y), label, font=font)
+        padding = max(3, round(font_size / 8))
+        background = [
+            text_bbox[0] - padding,
+            text_bbox[1] - padding,
+            text_bbox[2] + padding,
+            text_bbox[3] + padding,
+        ]
+        draw.rectangle(background, fill=color)
+        draw.text((text_x, text_y), label, fill=(255, 255, 255), font=font)
 
 
 def _run_vlm_binding(
@@ -411,8 +565,10 @@ def _run_vlm_binding(
     model = build_model(model_name, models[model_name])
     responses: list[dict[str, Any]] = []
     for request in requests:
-        image_path = Path(request["resolved_image_clean"]) if request.get("resolved_image_clean") else None
-        images = [ImageInput(path=image_path, role="annotated_view")] if image_path and image_path.exists() else []
+        image_text = request.get("resolved_overlay_image") or request.get("resolved_image_clean")
+        image_path = Path(image_text) if image_text else None
+        image_role = "binding_overlay" if request.get("resolved_overlay_image") else "annotated_view"
+        images = [ImageInput(path=image_path, role=image_role)] if image_path and image_path.exists() else []
         response = model.generate(
             images=images,
             prompt=request["prompt"],
@@ -474,10 +630,11 @@ def _vlm_binding_candidates(vlm_responses: list[dict[str, Any]]) -> list[dict[st
     return candidates
 
 
-def _binding_prompt(*, view_id: str, context: dict[str, Any]) -> str:
+def _binding_prompt(*, view_id: str, context: dict[str, Any], visual_labels: dict[str, Any]) -> str:
     prompt_context = {
         "view_id": view_id,
         "instructions": [
+            "Use the overlay image labels: dimensions are D1, D2, ... and geometry candidates are G1, G2, ...",
             "Select which numbered geometry candidate each dimension candidate refers to.",
             "Use visible leaders, arrows, extension lines, centerlines, and engineering drawing conventions.",
             "Rules provide top-k candidates only as support; reject them when visual evidence disagrees.",
@@ -496,6 +653,7 @@ def _binding_prompt(*, view_id: str, context: dict[str, Any]) -> str:
             "unbound_dimensions": ["dimension candidate id"],
             "ambiguous_bindings": [{"dimension_id": "id", "target_feature_ids": ["id1", "id2"], "reason": "why ambiguous"}],
         },
+        "visual_labels": visual_labels,
         "candidates": context,
     }
     return json.dumps(prompt_context, ensure_ascii=False, indent=2)

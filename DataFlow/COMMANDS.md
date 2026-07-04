@@ -1323,6 +1323,7 @@ python -m vlm_cadcoder.cli bind-dimensions-to-geometry \
 
 ```text
 DataFlow/09.Cross-viewGeometricReasoning/<sample_id>/dimension_geometry_bindings.json
+DataFlow/09.Cross-viewGeometricReasoning/<sample_id>/overlays/<view_id>_binding_overlay.png
 DataFlow/09.Cross-viewGeometricReasoning/dimension_geometry_binding_summary.csv
 DataFlow/09.Cross-viewGeometricReasoning/dimension_geometry_binding_summary.json
 ```
@@ -1331,12 +1332,14 @@ DataFlow/09.Cross-viewGeometricReasoning/dimension_geometry_binding_summary.json
 
 ```text
 binding_candidates      规则生成的尺寸-几何绑定候选，供视觉模型和人工复核
-vlm_requests            每个 view 给视觉模型的编号候选上下文和 prompt
+vlm_requests            每个 view 给视觉模型的编号候选上下文、overlay 图路径和 prompt
 vlm_responses           可选视觉模型输出
 unbound_dimensions      规则候选为空的尺寸
 ambiguous_bindings      规则 top 候选分数接近的歧义绑定
 quality                 是否可进入 ConstraintGraph；MVP 默认仍需人工复核
 ```
+
+若 clean view 图片存在且当前环境安装了 `Pillow`，该命令会额外生成绑定 overlay：尺寸候选标为 `D1/D2/...`，几何候选标为 `G1/G2/...`。服务器模型模式会优先把这张 overlay 图作为视觉输入；如果 overlay 无法生成，会自动退回 clean view，并在 `vlm_requests[].overlay_error` 中记录原因。
 
 说明：
 
