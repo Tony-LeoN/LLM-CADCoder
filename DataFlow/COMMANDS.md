@@ -1340,6 +1340,7 @@ quality                 是否可进入 ConstraintGraph；MVP 默认仍需人工
 ```
 
 若 clean view 图片存在且当前环境安装了 `Pillow`，该命令会额外生成绑定 overlay：尺寸候选标为 `D1/D2/...`，几何候选标为 `G1/G2/...`。服务器模型模式会优先把这张 overlay 图作为视觉输入；如果 overlay 无法生成，会自动退回 clean view，并在 `vlm_requests[].overlay_error` 中记录原因。
+`vlm_binding_candidates` 会把模型返回的 `G*` 标签映射回真实几何 `feature_id`；若模型返回未出现在 `visual_labels.features` 里的 `G*`，该候选会标记 `invalid_candidate`，并写入 `vlm_target_label_not_in_request`。
 
 说明：
 

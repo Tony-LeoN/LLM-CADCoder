@@ -58,6 +58,7 @@ def bind_dimensions_to_geometry_sample(
     model_name: str | None = None,
     model_config_path: str | Path = "configs/models.json",
     max_rule_candidates: int = 5,
+    max_visual_candidates: int = 20,
     output_path: str | Path | None = None,
 ) -> DimensionGeometryBindingResult:
     root = Path(dataflow_root)
@@ -89,6 +90,7 @@ def bind_dimensions_to_geometry_sample(
             dimensions=view_dimensions,
             features=view_features_for_binding,
             max_candidates=max_rule_candidates,
+            max_visual_candidates=max_visual_candidates,
         )
         rule_context_by_view[view_id] = view_rule_context
         for dimension_context in view_rule_context["dimensions"]:
@@ -260,6 +262,7 @@ def _rule_context(
     dimensions: list[dict[str, Any]],
     features: list[dict[str, Any]],
     max_candidates: int,
+    max_visual_candidates: int,
 ) -> dict[str, Any]:
     dimension_blocks = []
     for dimension in dimensions:
@@ -275,7 +278,13 @@ def _rule_context(
                 "rule_candidates": scored[:max_candidates],
             }
         )
-    return {"view_id": view_id, "dimensions": dimension_blocks}
+    return {
+        "view_id": view_id,
+        "feature_candidates": [
+            _compact_feature(feature) for feature in _visual_feature_candidates(features, max_visual_candidates)
+        ],
+        "dimensions": dimension_blocks,
+    }
 
 
 def _binding_feature_candidates(view_features: dict[str, Any], drawing_ir: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -302,6 +311,21 @@ def _binding_feature_candidates(view_features: dict[str, Any], drawing_ir: dict[
         if isinstance(item, dict) and item.get("type") == "geometry_component"
     ]
     return fallback, "drawing_ir_geometry_components"
+
+
+def _visual_feature_candidates(features: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    usable = [feature for feature in features if _id(feature) and _bbox_or_none(feature.get("bbox")) is not None]
+    usable.sort(key=_feature_visual_priority, reverse=True)
+    return usable[: max(0, limit)]
+
+
+def _feature_visual_priority(feature: dict[str, Any]) -> tuple[float, float]:
+    area = _float_or_default(feature.get("area_px"), 0.0)
+    bbox = _bbox_or_none(feature.get("bbox"))
+    if area <= 0 and bbox is not None:
+        area = float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+    confidence = _float_or_default(feature.get("confidence"), 0.0)
+    return area, confidence
 
 
 def _score_rule_candidate(*, dimension: dict[str, Any], feature: dict[str, Any]) -> dict[str, Any] | None:
@@ -420,6 +444,21 @@ def _labeled_rule_context(context: dict[str, Any]) -> tuple[dict[str, Any], dict
     visual_dimensions = []
     visual_features: list[dict[str, Any]] = []
 
+    def add_visual_feature(feature: dict[str, Any]) -> None:
+        feature_id = _id(feature)
+        if not feature_id or feature_id in feature_labels:
+            return
+        feature_labels[feature_id] = f"G{len(feature_labels) + 1}"
+        visual_features.append(
+            {
+                "label": feature_labels[feature_id],
+                "id": feature_id,
+                "type": feature.get("type"),
+                "bbox": feature.get("bbox"),
+                "bbox_on_page": feature.get("bbox_on_page"),
+            }
+        )
+
     for dimension_index, block in enumerate(context.get("dimensions") or [], start=1):
         dimension = dict(block.get("dimension") or {})
         dimension_label = f"D{dimension_index}"
@@ -439,25 +478,19 @@ def _labeled_rule_context(context: dict[str, Any]) -> tuple[dict[str, Any], dict
             candidate_copy = {key: value for key, value in candidate.items() if key != "feature"}
             feature = dict(candidate.get("feature") or {})
             feature_id = _id(feature)
-            if feature_id not in feature_labels:
-                feature_labels[feature_id] = f"G{len(feature_labels) + 1}"
-                visual_features.append(
-                    {
-                        "label": feature_labels[feature_id],
-                        "id": feature_id,
-                        "type": feature.get("type"),
-                        "bbox": feature.get("bbox"),
-                        "bbox_on_page": feature.get("bbox_on_page"),
-                    }
-                )
-            feature["label"] = feature_labels[feature_id]
+            add_visual_feature(feature)
+            feature["label"] = feature_labels.get(feature_id)
             candidate_copy["feature"] = feature
             labeled_candidates.append(candidate_copy)
 
         labeled_dimensions.append({"dimension": dimension, "rule_candidates": labeled_candidates})
 
+    for feature in context.get("feature_candidates") or []:
+        if isinstance(feature, dict):
+            add_visual_feature(feature)
+
     return (
-        {"view_id": context.get("view_id"), "dimensions": labeled_dimensions},
+        {"view_id": context.get("view_id"), "feature_candidates": visual_features, "dimensions": labeled_dimensions},
         {"dimensions": visual_dimensions, "features": visual_features},
     )
 
@@ -580,6 +613,7 @@ def _run_vlm_binding(
                 "request_id": request["id"],
                 "view_id": request["view_id"],
                 "model": model_name,
+                "visual_label_map": _visual_label_map(request.get("visual_labels")),
                 "prediction_text": response.text,
                 "prediction": parsed,
                 "is_json_valid": parsed is not None,
@@ -596,38 +630,107 @@ def _vlm_binding_candidates(vlm_responses: list[dict[str, Any]]) -> list[dict[st
         prediction = response.get("prediction")
         if not isinstance(prediction, dict):
             continue
+        visual_label_map = {
+            str(label): str(feature_id) for label, feature_id in (response.get("visual_label_map") or {}).items()
+        }
         bindings = prediction.get("bindings")
         if not isinstance(bindings, list):
             continue
         for binding in bindings:
             if not isinstance(binding, dict):
                 continue
-            target_ids = [str(item) for item in binding.get("target_feature_ids") or [] if item]
+            target_labels, target_ids, invalid_labels = _resolve_vlm_target_features(
+                binding=binding,
+                visual_label_map=visual_label_map,
+            )
+            review_reasons = [
+                "vlm_dimension_geometry_binding_candidate_needs_validation",
+                "constraint_graph_not_built",
+            ]
+            semantic_status = "candidate"
+            if invalid_labels:
+                review_reasons.append("vlm_target_label_not_in_request")
+                if not target_ids:
+                    semantic_status = "invalid_candidate"
             candidates.append(
                 {
                     "id": f"{response.get('view_id')}_vlm_binding_{len(candidates) + 1:03d}",
                     "type": "dimension_geometry_binding_candidate",
-                    "semantic_status": "candidate",
+                    "semantic_status": semantic_status,
                     "source": "vlm_binding_suggestion",
                     "view_id": response.get("view_id"),
                     "dimension_id": str(binding.get("dimension_id") or ""),
+                    "target_feature_labels": target_labels,
                     "target_feature_ids": target_ids,
                     "target_feature_id": target_ids[0] if target_ids else None,
+                    "invalid_target_feature_labels": invalid_labels,
                     "binding_type": str(binding.get("binding_type") or "unknown"),
                     "confidence": _float_or_default(binding.get("confidence"), 0.35),
                     "needs_manual_review": True,
-                    "review_reasons": [
-                        "vlm_dimension_geometry_binding_candidate_needs_validation",
-                        "constraint_graph_not_built",
-                    ],
+                    "review_reasons": review_reasons,
                     "vlm_support": {
                         "model": response.get("model"),
                         "request_id": response.get("request_id"),
+                        "raw_target_feature_ids": _raw_vlm_target_features(binding),
                         "evidence": list(binding.get("evidence") or []),
                     },
                 }
             )
     return candidates
+
+
+def _visual_label_map(visual_labels: Any) -> dict[str, str]:
+    if not isinstance(visual_labels, dict):
+        return {}
+    mapping: dict[str, str] = {}
+    for feature in visual_labels.get("features") or []:
+        if not isinstance(feature, dict):
+            continue
+        label = str(feature.get("label") or "")
+        feature_id = str(feature.get("id") or "")
+        if label and feature_id:
+            mapping[label] = feature_id
+    return mapping
+
+
+def _raw_vlm_target_features(binding: dict[str, Any]) -> list[str]:
+    raw_items: list[str] = []
+    for key in ("target_feature_ids", "target_feature_labels"):
+        for item in binding.get(key) or []:
+            if item:
+                text = str(item)
+                if text not in raw_items:
+                    raw_items.append(text)
+    return raw_items
+
+
+def _resolve_vlm_target_features(
+    *,
+    binding: dict[str, Any],
+    visual_label_map: dict[str, str],
+) -> tuple[list[str], list[str], list[str]]:
+    target_labels: list[str] = []
+    target_ids: list[str] = []
+    invalid_labels: list[str] = []
+    valid_feature_ids = set(visual_label_map.values())
+    for item in _raw_vlm_target_features(binding):
+        if item in visual_label_map:
+            target_labels.append(item)
+            feature_id = visual_label_map[item]
+            if feature_id not in target_ids:
+                target_ids.append(feature_id)
+            continue
+        if item in valid_feature_ids:
+            if item not in target_ids:
+                target_ids.append(item)
+            continue
+        if item.upper().startswith("G"):
+            invalid_labels.append(item)
+            target_labels.append(item)
+            continue
+        if item not in target_ids:
+            target_ids.append(item)
+    return target_labels, target_ids, invalid_labels
 
 
 def _binding_prompt(*, view_id: str, context: dict[str, Any], visual_labels: dict[str, Any]) -> str:
@@ -636,6 +739,7 @@ def _binding_prompt(*, view_id: str, context: dict[str, Any], visual_labels: dic
         "instructions": [
             "Use the overlay image labels: dimensions are D1, D2, ... and geometry candidates are G1, G2, ...",
             "Select which numbered geometry candidate each dimension candidate refers to.",
+            "Only use geometry labels listed in visual_labels.features; do not invent G labels.",
             "Use visible leaders, arrows, extension lines, centerlines, and engineering drawing conventions.",
             "Rules provide top-k candidates only as support; reject them when visual evidence disagrees.",
             "Return JSON object only with bindings, unbound_dimensions, and ambiguous_bindings.",
@@ -679,6 +783,8 @@ def _quality_block(
         reasons.append("ambiguous_rule_bindings")
     if any(not response.get("is_json_valid") for response in vlm_responses):
         reasons.append("invalid_vlm_binding_response")
+    if any(candidate.get("invalid_target_feature_labels") for candidate in vlm_binding_candidates):
+        reasons.append("invalid_vlm_target_labels")
     return {
         "view_count": len(views),
         "dimension_candidate_count": len(dimensions),

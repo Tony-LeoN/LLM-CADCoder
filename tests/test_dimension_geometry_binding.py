@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from vlm_cadcoder.dataflow import dimension_geometry_binding as binding_module
 from vlm_cadcoder.dataflow.dimension_geometry_binding import bind_dimensions_to_geometry_sample
+from vlm_cadcoder.models.base import ModelResponse
 
 
 def test_bind_dimensions_to_geometry_sample_writes_rule_scaffold(tmp_path: Path) -> None:
@@ -117,6 +119,111 @@ def test_bind_dimensions_to_geometry_writes_numbered_overlay(tmp_path: Path) -> 
     assert request["visual_labels"]["dimensions"][0]["label"] == "D1"
     assert request["visual_labels"]["features"][0]["label"] == "G1"
     assert "\"label\": \"D1\"" in request["prompt"]
+
+
+def test_bind_dimensions_to_geometry_keeps_fallback_features_visible_without_rule_match(tmp_path: Path) -> None:
+    dataflow = tmp_path / "DataFlow"
+    _write_inputs(dataflow, "Part-Visible-Fallback")
+    feature_path = dataflow / "08.Multi-viewFeatureExtraction" / "Part-Visible-Fallback" / "view_features.json"
+    feature_data = json.loads(feature_path.read_text(encoding="utf-8"))
+    feature_data["feature_candidates"] = []
+    feature_path.write_text(json.dumps(feature_data), encoding="utf-8")
+
+    drawing_ir_path = dataflow / "10.StructuredCADRepresentation" / "Part-Visible-Fallback" / "drawing_ir.json"
+    drawing_ir = json.loads(drawing_ir_path.read_text(encoding="utf-8"))
+    drawing_ir["feature_candidates"] = [
+        {
+            "id": "view_001_geometry_component_001",
+            "type": "geometry_component",
+            "view_id": "view_001",
+            "bbox": [20, 20, 360, 360],
+            "bbox_on_page": [120, 220, 460, 560],
+            "area_px": 10000,
+        }
+    ]
+    drawing_ir_path.write_text(json.dumps(drawing_ir), encoding="utf-8")
+
+    dimensions_path = dataflow / "08.Multi-viewFeatureExtraction" / "Part-Visible-Fallback" / "dimension_candidates.json"
+    dimensions = json.loads(dimensions_path.read_text(encoding="utf-8"))
+    dimensions["dimension_candidates"][0]["dimension_type"] = "geometric_tolerance"
+    dimensions["dimension_candidates"][1]["dimension_type"] = "unknown"
+    dimensions_path.write_text(json.dumps(dimensions), encoding="utf-8")
+
+    result = bind_dimensions_to_geometry_sample(sample_id="Part-Visible-Fallback", dataflow_root=dataflow)
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    request = data["vlm_requests"][0]
+    assert result.binding_candidate_count == 0
+    assert request["rule_candidate_count"] == 0
+    assert request["visual_labels"]["features"] == [
+        {
+            "label": "G1",
+            "id": "view_001_geometry_component_001",
+            "type": "unknown_geometry_candidate",
+            "bbox": [20, 20, 360, 360],
+            "bbox_on_page": [120, 220, 460, 560],
+        }
+    ]
+    assert "view_001_geometry_component_001" in request["prompt"]
+
+
+def test_bind_dimensions_to_geometry_maps_vlm_overlay_labels_to_feature_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataflow = tmp_path / "DataFlow"
+    _write_inputs(dataflow, "Part-VLM-Labels")
+    model_config = tmp_path / "models.json"
+    model_config.write_text(json.dumps({"models": {"fake_vlm": {}}}), encoding="utf-8")
+
+    class FakeModel:
+        def generate(self, images, prompt, generation_config=None):
+            return ModelResponse(
+                text="{}",
+                parsed_json={
+                    "bindings": [
+                        {
+                            "dimension_id": "view_001_dimension_001",
+                            "target_feature_ids": ["G1"],
+                            "binding_type": "diameter_of_hole",
+                            "confidence": 0.91,
+                            "evidence": ["uses visible label"],
+                        },
+                        {
+                            "dimension_id": "view_001_dimension_002",
+                            "target_feature_ids": ["G999"],
+                            "binding_type": "linear_extent",
+                            "confidence": 0.8,
+                            "evidence": ["invalid label should not be accepted"],
+                        },
+                    ],
+                    "unbound_dimensions": [],
+                    "ambiguous_bindings": [],
+                },
+                latency_sec=0.01,
+            )
+
+    monkeypatch.setattr(binding_module, "build_model", lambda _name, _config: FakeModel())
+
+    result = bind_dimensions_to_geometry_sample(
+        sample_id="Part-VLM-Labels",
+        dataflow_root=dataflow,
+        model_name="fake_vlm",
+        model_config_path=model_config,
+    )
+
+    data = json.loads(result.output_path.read_text(encoding="utf-8"))
+    valid, invalid = data["vlm_binding_candidates"]
+    assert valid["target_feature_labels"] == ["G1"]
+    assert valid["target_feature_ids"] == ["view_001_feature_001"]
+    assert valid["target_feature_id"] == "view_001_feature_001"
+    assert valid["semantic_status"] == "candidate"
+    assert invalid["target_feature_labels"] == ["G999"]
+    assert invalid["target_feature_ids"] == []
+    assert invalid["target_feature_id"] is None
+    assert invalid["invalid_target_feature_labels"] == ["G999"]
+    assert invalid["semantic_status"] == "invalid_candidate"
+    assert "vlm_target_label_not_in_request" in invalid["review_reasons"]
 
 
 def _write_inputs(dataflow: Path, sample_id: str) -> None:
